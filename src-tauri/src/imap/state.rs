@@ -42,28 +42,42 @@ pub struct HandleSlot {
 }
 
 impl HandleSlot {
-    /// Connect if needed, SELECT mailbox if needed. Returns the live session.
-    pub fn ensure_ready(
+    /// Reuse the live session if its fingerprint matches; otherwise
+    /// connect+auth fresh. After this returns, `self.handle` is `Some`
+    /// with a session matching `host`/`port`/`auth.username()`.
+    /// `auth` is borrowed and only cloned when we actually reconnect,
+    /// so steady-state callers don't pay to copy a password per call.
+    fn connect_if_needed(
         &mut self,
         host: &str,
         port: u16,
-        auth: ImapAuth,
-        mailbox: &str,
-    ) -> Result<&mut Session<TlsStream<TcpStream>>, ImapError> {
+        auth: &ImapAuth,
+    ) -> Result<&mut ImapHandle, ImapError> {
         let fp = ConnFingerprint::new(host, port, auth.username());
         let needs_connect = self
             .handle
             .as_ref()
             .map_or(true, |h| h.fingerprint != fp);
         if needs_connect {
-            let session = connect_and_auth(host, port, auth)?;
+            let session = connect_and_auth(host, port, auth.clone())?;
             self.handle = Some(ImapHandle {
                 session,
                 fingerprint: fp,
                 selected: None,
             });
         }
-        let h = self.handle.as_mut().expect("handle just inserted");
+        Ok(self.handle.as_mut().expect("handle just inserted"))
+    }
+
+    /// Connect if needed, SELECT mailbox if needed. Returns the live session.
+    pub fn ensure_ready(
+        &mut self,
+        host: &str,
+        port: u16,
+        auth: &ImapAuth,
+        mailbox: &str,
+    ) -> Result<&mut Session<TlsStream<TcpStream>>, ImapError> {
+        let h = self.connect_if_needed(host, port, auth)?;
         if h.selected.as_deref() != Some(mailbox) {
             h.session
                 .select(mailbox)
@@ -79,23 +93,10 @@ impl HandleSlot {
         &mut self,
         host: &str,
         port: u16,
-        auth: ImapAuth,
+        auth: &ImapAuth,
         mailbox: &str,
     ) -> Result<imap::types::Mailbox, ImapError> {
-        let fp = ConnFingerprint::new(host, port, auth.username());
-        let needs_connect = self
-            .handle
-            .as_ref()
-            .map_or(true, |h| h.fingerprint != fp);
-        if needs_connect {
-            let session = connect_and_auth(host, port, auth)?;
-            self.handle = Some(ImapHandle {
-                session,
-                fingerprint: fp,
-                selected: None,
-            });
-        }
-        let h = self.handle.as_mut().expect("handle just inserted");
+        let h = self.connect_if_needed(host, port, auth)?;
         let meta = h
             .session
             .select(mailbox)
@@ -124,7 +125,7 @@ pub fn run_with_session<F, T>(
     slot: &Mutex<HandleSlot>,
     host: &str,
     port: u16,
-    auth: ImapAuth,
+    auth: &ImapAuth,
     mailbox: &str,
     f: F,
 ) -> Result<T, ImapError>

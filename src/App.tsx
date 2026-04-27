@@ -216,6 +216,7 @@ function App() {
       textBody: null,
       htmlBody: null,
       attachments: [],
+      inlineParts: [],
     });
     setBodyLoading(true);
 

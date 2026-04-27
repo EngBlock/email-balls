@@ -7,16 +7,44 @@
 //! domain's own claim and render whatever SVG it points at, capped at a
 //! sensible size.
 
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use base64::Engine;
 use hickory_resolver::{
     config::{ResolverConfig, ResolverOpts},
+    name_server::TokioConnectionProvider,
     system_conf, AsyncResolver,
 };
 
 const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_SVG_BYTES: usize = 256 * 1024;
+
+type Resolver = AsyncResolver<TokioConnectionProvider>;
+
+fn http_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(FETCH_TIMEOUT)
+            .user_agent("email-balls/0.1 (bimi-fetch)")
+            .build()
+            .expect("reqwest client build")
+    })
+}
+
+fn resolver() -> &'static Resolver {
+    static RESOLVER: OnceLock<Resolver> = OnceLock::new();
+    RESOLVER.get_or_init(|| {
+        // Prefer the user's system DNS (so e.g. Pi-hole / corporate DNS
+        // resolvers are honoured, and Cloudflare doesn't see every BIMI
+        // probe); fall back to the bundled defaults if reading the system
+        // config fails — this is common in sandboxed builds on macOS.
+        let (config, opts) = system_conf::read_system_conf()
+            .unwrap_or_else(|_| (ResolverConfig::default(), ResolverOpts::default()));
+        AsyncResolver::tokio(config, opts)
+    })
+}
 
 /// Returns Ok(Some(svg_bytes)) if the domain publishes a fetchable
 /// BIMI logo, Ok(None) if there's no record / no `l=` / fetch failed
@@ -24,11 +52,10 @@ const MAX_SVG_BYTES: usize = 256 * 1024;
 /// errors the caller should treat as missing too.
 pub async fn lookup(domain: &str) -> Result<Option<Vec<u8>>, BimiError> {
     let qname = format!("default._bimi.{domain}.");
-    let resolver = build_resolver()?;
 
     // Hickory returns NoRecordsFound as an Err — collapse that into
     // Ok(None) so we cache it as a clean negative.
-    let txt = match resolver.txt_lookup(&qname).await {
+    let txt = match resolver().txt_lookup(&qname).await {
         Ok(t) => t,
         Err(e) if is_no_records(&e) => return Ok(None),
         Err(e) => return Err(BimiError::Dns(e.to_string())),
@@ -53,13 +80,7 @@ pub async fn lookup(domain: &str) -> Result<Option<Vec<u8>>, BimiError> {
         return Ok(None);
     }
 
-    let client = reqwest::Client::builder()
-        .timeout(FETCH_TIMEOUT)
-        .user_agent("email-balls/0.1 (bimi-fetch)")
-        .build()
-        .map_err(|e| BimiError::Http(e.to_string()))?;
-
-    let resp = match client.get(&svg_url).send().await {
+    let resp = match http_client().get(&svg_url).send().await {
         Ok(r) => r,
         Err(_) => return Ok(None),
     };
@@ -96,17 +117,6 @@ pub async fn lookup(domain: &str) -> Result<Option<Vec<u8>>, BimiError> {
 pub fn svg_data_url(bytes: &[u8]) -> String {
     let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
     format!("data:image/svg+xml;base64,{b64}")
-}
-
-fn build_resolver() -> Result<AsyncResolver<hickory_resolver::name_server::TokioConnectionProvider>, BimiError>
-{
-    // Prefer the user's system DNS (so e.g. Pi-hole / corporate DNS
-    // resolvers are honoured, and Cloudflare doesn't see every BIMI
-    // probe); fall back to the bundled defaults if reading the system
-    // config fails — this is common in sandboxed builds on macOS.
-    let (config, opts) = system_conf::read_system_conf()
-        .unwrap_or_else(|_| (ResolverConfig::default(), ResolverOpts::default()));
-    Ok(AsyncResolver::tokio(config, opts))
 }
 
 fn is_no_records(err: &hickory_resolver::error::ResolveError) -> bool {
@@ -171,8 +181,6 @@ fn looks_like_svg(bytes: &[u8]) -> bool {
 pub enum BimiError {
     #[error("dns: {0}")]
     Dns(String),
-    #[error("http: {0}")]
-    Http(String),
 }
 
 #[cfg(test)]

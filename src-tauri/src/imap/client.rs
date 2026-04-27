@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::TcpStream;
 use mail_parser::MimeHeaders;
 
@@ -13,9 +13,18 @@ use crate::imap::auth::ImapAuth;
 use crate::imap::error::ImapError;
 use crate::imap::state::{run_with_session, HandleSlot};
 use crate::imap::types::{
-    AttachmentInfo, EmailAddress, EmailBody, EmailEnvelope, SenderEvent, SenderSummary,
+    AttachmentInfo, EmailAddress, EmailBody, EmailEnvelope, InlinePart, SenderEvent, SenderSummary,
 };
+use base64::Engine;
 use tauri::ipc::Channel;
+
+/// Caps the per-message inline-part payload (sum of base64-encoded bytes
+/// returned to the frontend). Marketing emails routinely embed ~100 KB of
+/// inline images; abusive or pathological messages can carry tens of MB.
+/// 10 MB is enough for normal mail and small enough to keep the IPC hop
+/// snappy. Once exceeded we stop attaching further inline parts; the HTML
+/// will fall back to a broken-image placeholder for the missing cid.
+const INLINE_PARTS_TOTAL_CAP_BYTES: usize = 10 * 1024 * 1024;
 
 fn lossy_owned(b: &[u8]) -> String {
     String::from_utf8_lossy(b).into_owned()
@@ -179,7 +188,7 @@ pub fn merge_into(
     by_key: &mut HashMap<String, SenderSummary>,
     records: impl IntoIterator<Item = EnvelopeRecord>,
 ) -> Vec<SenderSummary> {
-    let mut touched: Vec<String> = Vec::new();
+    let mut touched: HashSet<String> = HashSet::new();
     for r in records {
         let mailbox = r.from_mailbox.unwrap_or_default().to_lowercase();
         let host = r.from_host.unwrap_or_default().to_lowercase();
@@ -207,8 +216,8 @@ pub fn merge_into(
         let entry = by_key.entry(key.clone()).or_insert_with(|| SenderSummary {
             address: EmailAddress {
                 name: None,
-                mailbox: if consumer { Some(mailbox.clone()) } else { None },
-                host: Some(group_host.clone()),
+                mailbox: if consumer { Some(mailbox) } else { None },
+                host: Some(group_host),
             },
             display_name: None,
             message_count: 0,
@@ -224,7 +233,7 @@ pub fn merge_into(
         // (typically 1–3 hosts per bubble) and the dedup is O(n²) only
         // in the contributing-host count, not the message count.
         if !entry.hosts.contains(&host) {
-            entry.hosts.push(host.clone());
+            entry.hosts.push(host);
         }
         entry.message_count += 1;
         if r.is_unread {
@@ -246,9 +255,7 @@ pub fn merge_into(
                 entry.display_name = name;
             }
         }
-        if !touched.contains(&key) {
-            touched.push(key);
-        }
+        touched.insert(key);
     }
     touched
         .into_iter()
@@ -406,7 +413,7 @@ pub fn list_senders(
 ) -> Result<Vec<SenderSummary>, ImapError> {
     let total = {
         let mut g = slot.lock().expect("imap state poisoned");
-        match g.refresh_mailbox(&host, port, auth.clone(), &mailbox) {
+        match g.refresh_mailbox(&host, port, &auth, &mailbox) {
             Ok(m) => m.exists,
             Err(e) => {
                 g.invalidate();
@@ -421,7 +428,7 @@ pub fn list_senders(
     let seq_start = total - n + 1;
     let range = format!("{seq_start}:*");
 
-    run_with_session(slot, &host, port, auth, &mailbox, |session| {
+    run_with_session(slot, &host, port, &auth, &mailbox, |session| {
         let fetches = session
             .fetch(&range, "(ENVELOPE FLAGS UID)")
             .map_err(|e| ImapError::Fetch(format!("{e}: {e:?}")))?;
@@ -446,7 +453,7 @@ pub fn stream_senders(
 ) -> Result<(), ImapError> {
     let total = {
         let mut g = slot.lock().expect("imap state poisoned");
-        match g.refresh_mailbox(&host, port, auth.clone(), &mailbox) {
+        match g.refresh_mailbox(&host, port, &auth, &mailbox) {
             Ok(m) => m.exists,
             Err(e) => {
                 g.invalidate();
@@ -474,7 +481,7 @@ pub fn stream_senders(
         let lo = hi.saturating_sub(STREAM_PAGE - 1).max(seq_start);
         let range = format!("{lo}:{hi}");
 
-        let delta = run_with_session(slot, &host, port, auth.clone(), &mailbox, |session| {
+        let delta = run_with_session(slot, &host, port, &auth, &mailbox, |session| {
             let fetches = session
                 .fetch(&range, "(ENVELOPE FLAGS UID)")
                 .map_err(|e| ImapError::Fetch(format!("{e}: {e:?}")))?;
@@ -507,7 +514,7 @@ pub fn fetch_from_sender(
 ) -> Result<Vec<EmailEnvelope>, ImapError> {
     // Try server-side SEARCH first; fall back to a client-side scan if the
     // server's SEARCH response fails to parse (e.g. ProtonMail Bridge).
-    let search_outcome = run_with_session(slot, &host, port, auth.clone(), &mailbox, |session| {
+    let search_outcome = run_with_session(slot, &host, port, &auth, &mailbox, |session| {
         let query = format!("FROM {}", imap_quoted(&from_address));
         match session.uid_search(&query) {
             Ok(set) => Ok(SearchOutcome::Uids(set.into_iter().collect())),
@@ -524,7 +531,7 @@ pub fn fetch_from_sender(
         SearchOutcome::FallbackNeeded => {
             let total = {
                 let mut g = slot.lock().expect("imap state poisoned");
-                match g.refresh_mailbox(&host, port, auth.clone(), &mailbox) {
+                match g.refresh_mailbox(&host, port, &auth, &mailbox) {
                     Ok(m) => m.exists,
                     Err(e) => {
                         g.invalidate();
@@ -532,7 +539,7 @@ pub fn fetch_from_sender(
                     }
                 }
             };
-            return run_with_session(slot, &host, port, auth, &mailbox, |session| {
+            return run_with_session(slot, &host, port, &auth, &mailbox, |session| {
                 fallback_client_side_filter(session, total, &from_address, limit)
             });
         }
@@ -573,7 +580,7 @@ pub fn fetch_envelopes_by_uids(
         .collect::<Vec<_>>()
         .join(",");
 
-    run_with_session(slot, &host, port, auth, &mailbox, |session| {
+    run_with_session(slot, &host, port, &auth, &mailbox, |session| {
         let fetches = session
             .uid_fetch(&uid_set, "(ENVELOPE FLAGS UID)")
             .map_err(|e| ImapError::Fetch(format!("{e}: {e:?}")))?;
@@ -649,7 +656,7 @@ pub fn fetch_body(
     mailbox: String,
     uid: u32,
 ) -> Result<EmailBody, ImapError> {
-    run_with_session(slot, &host, port, auth, &mailbox, |session| {
+    run_with_session(slot, &host, port, &auth, &mailbox, |session| {
         // BODY[] (without .PEEK) atomically sets the \Seen flag on the
         // server as part of the same round trip — that's the standard
         // "open mail = mark read" behaviour every regular mail client
@@ -670,6 +677,39 @@ pub(crate) fn build_email_body(uid: u32, raw: &[u8]) -> Result<EmailBody, ImapEr
         .parse(raw)
         .ok_or_else(|| ImapError::Parse("mail-parser returned None".into()))?;
 
+    let mut attachments: Vec<AttachmentInfo> = Vec::new();
+    let mut inline_parts: Vec<InlinePart> = Vec::new();
+    let mut inline_total_bytes: usize = 0;
+
+    for p in msg.attachments() {
+        let content_type = part_content_type(p);
+
+        // Anything carrying a Content-ID is potentially referenceable from
+        // the HTML body via `cid:`. We split those out and ship the bytes
+        // (base64) so the renderer can rewrite to `data:` URLs at sanitize
+        // time. Parts without a Content-ID are user-facing attachments
+        // listed under the body — metadata-only for now (download lives
+        // in a separate task).
+        if let Some(cid) = p.content_id() {
+            let bytes = p.contents();
+            if inline_total_bytes.saturating_add(bytes.len()) > INLINE_PARTS_TOTAL_CAP_BYTES {
+                continue;
+            }
+            inline_total_bytes += bytes.len();
+            inline_parts.push(InlinePart {
+                content_id: strip_cid_brackets(cid).to_owned(),
+                content_type,
+                data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+            });
+        } else {
+            attachments.push(AttachmentInfo {
+                filename: p.attachment_name().map(str::to_owned),
+                content_type,
+                size: p.contents().len() as u32,
+            });
+        }
+    }
+
     Ok(EmailBody {
         uid,
         subject: msg.subject().map(str::to_owned),
@@ -679,24 +719,28 @@ pub(crate) fn build_email_body(uid: u32, raw: &[u8]) -> Result<EmailBody, ImapEr
         date: msg.date().map(|d| d.to_rfc822()),
         text_body: msg.body_text(0).map(|c| c.into_owned()),
         html_body: msg.body_html(0).map(|c| c.into_owned()),
-        attachments: msg
-            .attachments()
-            .map(|p| {
-                let content_type = p
-                    .content_type()
-                    .map(|ct| {
-                        let sub = ct.subtype().unwrap_or("octet-stream");
-                        format!("{}/{}", ct.ctype(), sub)
-                    })
-                    .unwrap_or_else(|| "application/octet-stream".into());
-                AttachmentInfo {
-                    filename: p.attachment_name().map(str::to_owned),
-                    content_type,
-                    size: p.contents().len() as u32,
-                }
-            })
-            .collect(),
+        attachments,
+        inline_parts,
     })
+}
+
+fn part_content_type(p: &mail_parser::MessagePart<'_>) -> String {
+    p.content_type()
+        .map(|ct| {
+            let sub = ct.subtype().unwrap_or("octet-stream");
+            format!("{}/{}", ct.ctype(), sub)
+        })
+        .unwrap_or_else(|| "application/octet-stream".into())
+}
+
+/// Content-ID values arrive as `<abc@host>` per RFC 2392; HTML references
+/// strip the brackets (`cid:abc@host`). We normalise to the bracket-less
+/// form so the frontend's cid→data lookup can match by exact equality.
+fn strip_cid_brackets(cid: &str) -> &str {
+    let s = cid.trim();
+    s.strip_prefix('<')
+        .and_then(|t| t.strip_suffix('>'))
+        .unwrap_or(s)
 }
 
 #[cfg(test)]
@@ -1153,5 +1197,49 @@ mod tests {
         assert_eq!(body.attachments[0].filename.as_deref(), Some("note.txt"));
         assert!(body.attachments[0].content_type.starts_with("text/plain"));
         assert!(body.attachments[0].size > 0);
+        assert!(body.inline_parts.is_empty());
+    }
+
+    #[test]
+    fn build_email_body_extracts_inline_parts_with_stripped_cid() {
+        // Tiny 1×1 PNG; sufficient bytes to round-trip through base64.
+        let png_bytes: &[u8] = b"\x89PNG\r\n\x1a\nFAKEPNG";
+        let png_b64 = base64::engine::general_purpose::STANDARD.encode(png_bytes);
+
+        // multipart/related with HTML referencing cid:logo and a matching
+        // image part carrying `Content-ID: <logo@host>` (angle brackets per
+        // RFC 2392 — the renderer strips them so cid:logo resolves).
+        let raw = format!(
+            "From: a@b.com\r\n\
+             To: c@d.com\r\n\
+             Subject: inline image\r\n\
+             MIME-Version: 1.0\r\n\
+             Content-Type: multipart/related; boundary=\"BOUND\"\r\n\
+             \r\n\
+             --BOUND\r\n\
+             Content-Type: text/html; charset=utf-8\r\n\
+             \r\n\
+             <p><img src=\"cid:logo@host\"></p>\r\n\
+             --BOUND\r\n\
+             Content-Type: image/png\r\n\
+             Content-ID: <logo@host>\r\n\
+             Content-Transfer-Encoding: base64\r\n\
+             Content-Disposition: inline\r\n\
+             \r\n\
+             {png_b64}\r\n\
+             --BOUND--\r\n",
+        );
+        let body = build_email_body(7, raw.as_bytes()).expect("parse");
+
+        assert!(body.html_body.is_some(), "html body should parse");
+        assert!(
+            body.attachments.is_empty(),
+            "inline part must not appear in attachments"
+        );
+        assert_eq!(body.inline_parts.len(), 1, "inline part must be extracted");
+        let part = &body.inline_parts[0];
+        assert_eq!(part.content_id, "logo@host", "cid brackets must be stripped");
+        assert_eq!(part.content_type, "image/png");
+        assert_eq!(part.data_base64, png_b64, "bytes round-trip via base64");
     }
 }

@@ -78,7 +78,12 @@ impl CacheState {
 
     pub fn put(&self, domain: &str, resolution: &BimiResolution) {
         let now = now_secs();
-        let snapshot = {
+        // Serialize under the lock — no full-map clone — then drop the
+        // lock before the disk write so concurrent lookups aren't
+        // blocked on fsync. `serde_json::to_vec_pretty` borrows the
+        // map, so this is one allocation (the output bytes) regardless
+        // of how many entries we've cached.
+        let bytes = {
             let Ok(mut guard) = self.inner.lock() else { return };
             let entry = match resolution {
                 BimiResolution::Found { svg_data_url } => Entry::Found {
@@ -88,23 +93,19 @@ impl CacheState {
                 BimiResolution::Missing => Entry::Missing { fetched_at: now },
             };
             guard.entries.insert(domain.to_string(), entry);
-            // Clone under the lock so the file write happens unlocked
-            // — the disk write is the slow part and other lookups can
-            // keep flowing while it's in flight.
-            CacheFile {
-                entries: guard.entries.clone(),
+            match serde_json::to_vec_pretty(&*guard) {
+                Ok(b) => b,
+                Err(_) => return,
             }
         };
-        let _ = persist(&self.path, &snapshot);
+        let _ = write_to_disk(&self.path, &bytes);
     }
 }
 
-fn persist(path: &PathBuf, file: &CacheFile) -> std::io::Result<()> {
+fn write_to_disk(path: &PathBuf, bytes: &[u8]) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let bytes = serde_json::to_vec_pretty(file)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     std::fs::write(path, bytes)
 }
 

@@ -46,6 +46,17 @@ export interface AttachmentInfo {
   size: number;
 }
 
+/** A MIME part carrying a Content-ID, referenced from the HTML body via
+ *  `<img src="cid:…">`. The renderer rewrites those URLs to `data:` URLs
+ *  using {@link InlinePart.dataBase64} so the iframe resolves them
+ *  without a network request. `contentId` arrives bracket-stripped to
+ *  match the form HTML uses (i.e. `logo@host`, not `<logo@host>`). */
+export interface InlinePart {
+  contentId: string;
+  contentType: string;
+  dataBase64: string;
+}
+
 export interface EmailBody {
   uid: number;
   subject: string | null;
@@ -56,6 +67,7 @@ export interface EmailBody {
   textBody: string | null;
   htmlBody: string | null;
   attachments: AttachmentInfo[];
+  inlineParts: InlinePart[];
 }
 
 export type ImapAuth = {

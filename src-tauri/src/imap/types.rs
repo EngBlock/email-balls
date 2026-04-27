@@ -66,6 +66,18 @@ pub struct AttachmentInfo {
     pub size: u32,
 }
 
+/// An inline MIME part (Content-ID-bearing image or other resource referenced
+/// by the HTML body via `<img src="cid:…">`). Renderer rewrites `cid:` URLs
+/// to `data:` URLs at sanitize time using `data_base64` so the iframe
+/// resolves them without a network request.
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct InlinePart {
+    pub content_id: String,
+    pub content_type: String,
+    pub data_base64: String,
+}
+
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct EmailBody {
@@ -78,6 +90,7 @@ pub struct EmailBody {
     pub text_body: Option<String>,
     pub html_body: Option<String>,
     pub attachments: Vec<AttachmentInfo>,
+    pub inline_parts: Vec<InlinePart>,
 }
 
 #[cfg(test)]
