@@ -1,17 +1,20 @@
 mod avatar;
 mod commands;
+mod db;
 mod imap;
 
 use tauri::Manager;
 
 use crate::avatar::CacheState;
-use crate::imap::ImapState;
+use crate::db::{Cache, CacheState as EnvelopeCacheState};
+use crate::imap::{IdleManager, ImapState};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(ImapState::default())
+        .manage(IdleManager::default())
         .setup(|app| {
             let app_data = app
                 .path()
@@ -30,6 +33,18 @@ pub fn run() {
             let cache = CacheState::load(app_data.join("bimi-cache.json"));
             app.manage(cache);
 
+            // Envelope cache. Falls back to an in-memory database if the
+            // SQLite file fails to open — the app stays usable, just
+            // without persistence across restarts.
+            let envelope_cache = match Cache::open(&app_data.join("mail-cache.sqlite")) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("envelope cache: falling back to in-memory ({e})");
+                    Cache::open_in_memory().expect("in-memory cache should always open")
+                }
+            };
+            app.manage(EnvelopeCacheState::new(envelope_cache));
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -39,6 +54,8 @@ pub fn run() {
             commands::fetch_envelopes_by_uids,
             commands::fetch_email_body,
             commands::resolve_bimi,
+            commands::start_imap_idle,
+            commands::stop_imap_idle,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

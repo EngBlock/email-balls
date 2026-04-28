@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence } from "framer-motion";
 import "./App.css";
 import {
@@ -6,11 +6,15 @@ import {
   fetchEmailsFromSender,
   fetchEnvelopesByUids,
   mergeSenders,
+  onImapUpdate,
   senderEmail,
+  startImapIdle,
+  stopImapIdle,
   streamSenders,
   type AccountConn,
   type EmailBody,
   type EmailEnvelope,
+  type ImapErrorKind,
   type ImapInvocationError,
   type SenderSummary,
 } from "./lib/imap";
@@ -22,7 +26,6 @@ import {
 } from "./components/EmailBodyDrawer";
 import {
   clearAccount,
-  hasStoredAccount,
   loadAccount,
   saveAccount,
 } from "./lib/accountStore";
@@ -56,12 +59,25 @@ function buildAccount(form: FormState): AccountConn {
   };
 }
 
+const IMAP_ERROR_KINDS: ReadonlySet<ImapErrorKind> = new Set([
+  "connect",
+  "auth",
+  "mailbox",
+  "search",
+  "fetch",
+  "parse",
+  "notFound",
+  "internal",
+]);
+
 function isImapError(e: unknown): e is ImapInvocationError {
+  if (typeof e !== "object" || e === null) return false;
+  const kind = (e as { kind?: unknown }).kind;
+  const message = (e as { message?: unknown }).message;
   return (
-    typeof e === "object" &&
-    e !== null &&
-    "kind" in e &&
-    "message" in e
+    typeof kind === "string" &&
+    typeof message === "string" &&
+    IMAP_ERROR_KINDS.has(kind as ImapErrorKind)
   );
 }
 
@@ -78,7 +94,7 @@ function App() {
   const [stage, setStage] = useState<Stage>("accounts");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [hasSaved, setHasSaved] = useState<boolean>(hasStoredAccount());
+  const [hasSaved, setHasSaved] = useState<boolean>(stored !== null);
 
   const [senders, setSenders] = useState<SenderSummary[]>([]);
   const [activeSender, setActiveSender] = useState<SenderSummary | null>(null);
@@ -86,6 +102,7 @@ function App() {
   const [body, setBody] = useState<EmailBody | null>(null);
   const [bodyLoading, setBodyLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [unreadOnly, setUnreadOnly] = useState(false);
 
   const autoTriedRef = useRef(false);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -94,6 +111,13 @@ function App() {
   // through senders / emails quickly.
   const senderFetchSeqRef = useRef(0);
   const bodyFetchSeqRef = useRef(0);
+  // IDLE-triggered refresh state. `inFlightRef` drops overlapping
+  // refreshes (a still-running streamSenders absorbs whatever the next
+  // notification would have caught). `debounceTimerRef` collapses
+  // bursts — servers commonly fire EXISTS+FETCH back-to-back when a new
+  // message lands.
+  const refreshInFlightRef = useRef(false);
+  const debounceTimerRef = useRef<number | null>(null);
 
   function update<K extends keyof FormState>(k: K, v: FormState[K]) {
     setForm((prev) => ({ ...prev, [k]: v }));
@@ -106,7 +130,7 @@ function App() {
     setSenders([]);
     setStage("senders");
     try {
-      await streamSenders(acc, 1000, (event) => {
+      await streamSenders(acc, 5000, (event) => {
         if (event.kind === "chunk") {
           setSenders((prev) => mergeSenders(prev, event.senders));
         }
@@ -128,6 +152,79 @@ function App() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Background delta refresh, triggered by IDLE notifications. Uses
+  // `skipReplay` because the UI already holds the cached state; we only
+  // want the new/changed/expunged deltas, not a redundant re-emit of
+  // every cached sender.
+  const triggerRefresh = useCallback(() => {
+    if (!account) return;
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
+    void streamSenders(
+      account,
+      5000,
+      (event) => {
+        if (event.kind === "chunk") {
+          setSenders((prev) => mergeSenders(prev, event.senders));
+        }
+      },
+      { skipReplay: true },
+    )
+      .catch((err) => {
+        console.error("imap idle refresh failed:", err);
+      })
+      .finally(() => {
+        refreshInFlightRef.current = false;
+      });
+  }, [account]);
+
+  // Drive IDLE: spin it up whenever we have a connected account, tear
+  // it down on sign-out / account swap. The backend dedupes by
+  // host/port/username/mailbox so re-issuing on the same account is a
+  // no-op.
+  useEffect(() => {
+    if (!account) return;
+    void startImapIdle(account).catch((err) => {
+      console.error("startImapIdle failed:", err);
+    });
+    return () => {
+      void stopImapIdle().catch((err) => {
+        console.error("stopImapIdle failed:", err);
+      });
+    };
+  }, [account]);
+
+  // Subscribe to IDLE notifications. 500ms debounce collapses
+  // EXISTS/FETCH bursts into one refresh.
+  useEffect(() => {
+    if (!account) return;
+    let unlisten: (() => void) | null = null;
+    let cancelled = false;
+    void onImapUpdate(() => {
+      if (debounceTimerRef.current !== null) {
+        window.clearTimeout(debounceTimerRef.current);
+      }
+      debounceTimerRef.current = window.setTimeout(() => {
+        debounceTimerRef.current = null;
+        triggerRefresh();
+      }, 500);
+    }).then((u) => {
+      if (cancelled) {
+        u();
+      } else {
+        unlisten = u;
+      }
+    });
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+      if (debounceTimerRef.current !== null) {
+        window.clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
+    };
+  }, [account, triggerRefresh]);
 
   useEffect(() => {
     if (stage !== "senders") return;
@@ -169,32 +266,39 @@ function App() {
     setError(null);
   }
 
-  async function onPickSender(s: SenderSummary) {
-    if (!account) return;
-    // Swap to the new sender. Clear stale emails / open body so the
-    // list drawer header + body resets cleanly while the new fetch
-    // runs.
-    setActiveSender(s);
-    setBody(null);
-    setEmails([]);
-    setError(null);
-    setLoading(true);
-    const seq = ++senderFetchSeqRef.current;
-    try {
-      // Prefer the cached UIDs from the streaming scan — no SEARCH, no
-      // full-mailbox round trip. Fall back to FROM-search only if a
-      // sender ever lands here without UIDs (shouldn't happen today).
-      const result =
-        s.uids.length > 0
-          ? await fetchEnvelopesByUids(account, s.uids)
-          : await fetchEmailsFromSender(account, senderEmail(s), 100);
-      if (senderFetchSeqRef.current === seq) setEmails(result);
-    } catch (err) {
-      if (senderFetchSeqRef.current === seq) setError(errorLabel(err));
-    } finally {
-      if (senderFetchSeqRef.current === seq) setLoading(false);
-    }
-  }
+  // useCallback so the SenderBubbles' memoised <Bubble> children see a
+  // stable `onPick` identity across re-renders. Without this, every
+  // App render mints a fresh function and React.memo's prop check
+  // would always fail, defeating the per-bubble memoisation.
+  const onPickSender = useCallback(
+    async (s: SenderSummary) => {
+      if (!account) return;
+      // Swap to the new sender. Clear stale emails / open body so the
+      // list drawer header + body resets cleanly while the new fetch
+      // runs.
+      setActiveSender(s);
+      setBody(null);
+      setEmails([]);
+      setError(null);
+      setLoading(true);
+      const seq = ++senderFetchSeqRef.current;
+      try {
+        // Prefer the cached UIDs from the streaming scan — no SEARCH, no
+        // full-mailbox round trip. Fall back to FROM-search only if a
+        // sender ever lands here without UIDs (shouldn't happen today).
+        const result =
+          s.uids.length > 0
+            ? await fetchEnvelopesByUids(account, s.uids)
+            : await fetchEmailsFromSender(account, senderEmail(s), 200);
+        if (senderFetchSeqRef.current === seq) setEmails(result);
+      } catch (err) {
+        if (senderFetchSeqRef.current === seq) setError(errorLabel(err));
+      } finally {
+        if (senderFetchSeqRef.current === seq) setLoading(false);
+      }
+    },
+    [account],
+  );
 
   function onPickEmail(env: EmailEnvelope) {
     if (!account) return;
@@ -335,6 +439,7 @@ function App() {
             senders={senders}
             onPick={onPickSender}
             searchQuery={searchQuery}
+            unreadOnly={unreadOnly}
           />
         </section>
       )}
@@ -363,32 +468,92 @@ function App() {
       </AnimatePresence>
 
       {stage === "senders" && !activeSender && (
-        <input
-          ref={searchInputRef}
-          type="search"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="search senders… (press /)"
-          autoCorrect="off"
-          autoCapitalize="off"
-          spellCheck={false}
+        <div
           style={{
             position: "fixed",
             bottom: 24,
             right: 24,
             zIndex: 10,
-            minWidth: 280,
-            padding: "10px 14px",
-            borderRadius: 10,
-            border: "1px solid rgba(255, 255, 255, 0.18)",
-            background: "rgba(20, 20, 20, 0.7)",
-            color: "white",
-            fontSize: "0.95em",
-            backdropFilter: "blur(10px)",
-            boxShadow: "0 6px 20px rgba(0, 0, 0, 0.35)",
-            outline: "none",
+            display: "flex",
+            gap: 8,
+            alignItems: "stretch",
           }}
-        />
+        >
+          <button
+            type="button"
+            aria-pressed={unreadOnly}
+            aria-label={
+              unreadOnly
+                ? "Showing only senders with unread mail"
+                : "Show only senders with unread mail"
+            }
+            title="Toggle unread-only filter"
+            onClick={() => setUnreadOnly((v) => !v)}
+            style={{
+              width: 44,
+              padding: 0,
+              borderRadius: 10,
+              border: `1px solid ${unreadOnly ? "rgba(255, 77, 79, 0.85)" : "rgba(255, 255, 255, 0.18)"}`,
+              background: unreadOnly
+                ? "rgba(255, 77, 79, 0.18)"
+                : "rgba(20, 20, 20, 0.7)",
+              color: unreadOnly ? "#ff8a8c" : "rgba(255, 255, 255, 0.7)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: "pointer",
+              backdropFilter: "blur(10px)",
+              boxShadow: "0 6px 20px rgba(0, 0, 0, 0.35)",
+              transition:
+                "color 180ms, background 180ms, border-color 180ms",
+            }}
+          >
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.8}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden
+            >
+              <rect x="3" y="5" width="18" height="14" rx="2" />
+              <path d="M3 7l9 6 9-6" />
+              <circle
+                cx="19"
+                cy="5"
+                r="3"
+                fill="#ff4d4f"
+                stroke="rgba(20, 20, 20, 0.9)"
+                strokeWidth={1.5}
+              />
+            </svg>
+          </button>
+          <input
+            ref={searchInputRef}
+            type="search"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="search senders… (press /)"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            style={{
+              minWidth: 280,
+              padding: "10px 14px",
+              borderRadius: 10,
+              border: "1px solid rgba(255, 255, 255, 0.18)",
+              background: "rgba(20, 20, 20, 0.7)",
+              color: "white",
+              fontSize: "0.95em",
+              backdropFilter: "blur(10px)",
+              boxShadow: "0 6px 20px rgba(0, 0, 0, 0.35)",
+              outline: "none",
+            }}
+          />
+        </div>
       )}
     </main>
   );

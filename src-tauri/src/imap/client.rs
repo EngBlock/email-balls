@@ -8,7 +8,9 @@ use imap_proto::types::Address;
 use native_tls::TlsStream;
 
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::db::{AccountMailbox, Cache, MailboxMeta};
 use crate::imap::auth::ImapAuth;
 use crate::imap::error::ImapError;
 use crate::imap::state::{run_with_session, HandleSlot};
@@ -99,6 +101,7 @@ fn addresses_from_imap(opt: Option<&Vec<Address>>) -> Vec<EmailAddress> {
 /// from a sending subdomain (`email.brand.com`), and BIMI lookups are
 /// per-host, so subdomain-distinct grouping is a feature, not a bug.
 const CONSUMER_DOMAINS: &[&str] = &[
+    "appleid.com",
     "gmail.com",
     "googlemail.com",
     "yahoo.com",
@@ -424,8 +427,8 @@ pub fn list_senders(
     if total == 0 {
         return Ok(Vec::new());
     }
-    let n = scan_limit.unwrap_or(500).min(total);
-    let seq_start = total - n + 1;
+    let n = scan_limit.map(|l| l.min(total)).unwrap_or(total);
+    let seq_start = total.saturating_sub(n) + 1;
     let range = format!("{seq_start}:*");
 
     run_with_session(slot, &host, port, &auth, &mailbox, |session| {
@@ -442,61 +445,437 @@ pub fn list_senders(
 /// per-page round-trip overhead doesn't dominate a 500-message scan.
 const STREAM_PAGE: u32 = 50;
 
+/// Page size for flag-only refresh. Larger than STREAM_PAGE because
+/// `(UID FLAGS)` responses are tiny — we're just diffing seen state.
+const FLAG_PAGE: usize = 500;
+
+fn now_unix() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn uid_set_string(uids: &[u32]) -> String {
+    uids.iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Project an `EmailEnvelope` (which we cache and re-emit) onto an
+/// `EnvelopeRecord` (the shape `merge_into` aggregates from). One
+/// representation, one source of truth — avoids having two parallel
+/// FETCH-to-record mappings drift apart.
+fn record_from_envelope(env: &EmailEnvelope) -> Option<EnvelopeRecord> {
+    let from = env.from.first()?;
+    Some(EnvelopeRecord {
+        uid: env.uid,
+        from_mailbox: from.mailbox.clone(),
+        from_host: from.host.clone(),
+        from_name: from.name.clone(),
+        subject: env.subject.clone(),
+        date: env.date.clone(),
+        is_unread: !env.flags.iter().any(|f| f == "\\Seen"),
+    })
+}
+
+/// Fetch a page of envelopes by sequence range or UID set, retrying
+/// once on a fresh session if the first attempt fails. `use_uid_fetch`
+/// switches between `FETCH` (sequence numbers) and `UID FETCH`.
+fn fetch_envelope_range(
+    slot: &Mutex<HandleSlot>,
+    host: &str,
+    port: u16,
+    auth: &ImapAuth,
+    mailbox: &str,
+    range: &str,
+    use_uid_fetch: bool,
+) -> Result<Vec<EmailEnvelope>, ImapError> {
+    let try_fetch = |session: &mut Session<TlsStream<TcpStream>>| {
+        let fetches = if use_uid_fetch {
+            session.uid_fetch(range, "(ENVELOPE FLAGS UID)")
+        } else {
+            session.fetch(range, "(ENVELOPE FLAGS UID)")
+        }
+        .map_err(|e| ImapError::Fetch(format!("{e}: {e:?}")))?;
+        Ok(fetches
+            .iter()
+            .filter_map(|f| f.uid.map(|u| envelope_from_fetch(u, f)))
+            .collect())
+    };
+    match run_with_session(slot, host, port, auth, mailbox, try_fetch) {
+        Ok(v) => Ok(v),
+        Err(_) => {
+            {
+                let mut g = slot.lock().expect("imap state poisoned");
+                g.invalidate();
+            }
+            run_with_session(slot, host, port, auth, mailbox, try_fetch)
+        }
+    }
+}
+
+/// Server's view of new UIDs above `lower_exclusive`. Excludes the
+/// boundary value because `UID a:*` is inclusive of `a` per RFC 3501,
+/// and on a quiet mailbox the server may echo `a` back.
+fn search_new_uids(
+    slot: &Mutex<HandleSlot>,
+    host: &str,
+    port: u16,
+    auth: &ImapAuth,
+    mailbox: &str,
+    lower_exclusive: u32,
+) -> Result<Vec<u32>, ImapError> {
+    run_with_session(slot, host, port, auth, mailbox, |session| {
+        let q = format!("UID {}:*", lower_exclusive.saturating_add(1));
+        session
+            .uid_search(&q)
+            .map(|set| {
+                let mut v: Vec<u32> = set
+                    .into_iter()
+                    .filter(|u| *u > lower_exclusive)
+                    .collect();
+                v.sort_unstable_by(|a, b| b.cmp(a));
+                v
+            })
+            .map_err(|e| ImapError::Search(format!("{e}: {e:?}")))
+    })
+}
+
+fn search_all_uids(
+    slot: &Mutex<HandleSlot>,
+    host: &str,
+    port: u16,
+    auth: &ImapAuth,
+    mailbox: &str,
+) -> Result<HashSet<u32>, ImapError> {
+    run_with_session(slot, host, port, auth, mailbox, |session| {
+        session
+            .uid_search("ALL")
+            .map(|set| set.into_iter().collect::<HashSet<u32>>())
+            .map_err(|e| ImapError::Search(format!("{e}: {e:?}")))
+    })
+}
+
+/// Fetch FLAGS for the given UIDs in chunks and write any changed sets
+/// back to the cache. Returns the count of rows whose unread state
+/// changed — caller decides whether to re-emit aggregated senders.
+fn refresh_flags(
+    slot: &Mutex<HandleSlot>,
+    host: &str,
+    port: u16,
+    auth: &ImapAuth,
+    mailbox: &str,
+    uids: &[u32],
+    cache: &Cache,
+    key: &AccountMailbox,
+    prior_unread: &HashMap<u32, bool>,
+) -> usize {
+    if uids.is_empty() {
+        return 0;
+    }
+    let mut updates: Vec<(u32, Vec<String>)> = Vec::new();
+    for chunk in uids.chunks(FLAG_PAGE) {
+        let set = uid_set_string(chunk);
+        let fetched = run_with_session(slot, host, port, auth, mailbox, |session| {
+            session
+                .uid_fetch(&set, "(UID FLAGS)")
+                .map_err(|e| ImapError::Fetch(format!("{e}: {e:?}")))
+        });
+        let fetches = match fetched {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("imap stream_senders: flag fetch failed: {e}");
+                continue;
+            }
+        };
+        for f in fetches.iter() {
+            let Some(uid) = f.uid else { continue };
+            let new_flags: Vec<String> = f.flags().iter().map(flag_to_string).collect();
+            let new_unread = !new_flags.iter().any(|s| s == "\\Seen");
+            // Only persist when the unread state flipped — there's
+            // nothing user-visible to do for flag changes that don't
+            // affect the bubble UI (e.g. \Answered toggling). Skipping
+            // those keeps the cache writes proportional to real news.
+            match prior_unread.get(&uid) {
+                Some(&prev) if prev == new_unread => continue,
+                _ => {}
+            }
+            updates.push((uid, new_flags));
+        }
+    }
+    if updates.is_empty() {
+        return 0;
+    }
+    let n = updates.len();
+    if let Err(e) = cache.update_flags(key, &updates) {
+        eprintln!("envelope cache: update_flags failed: {e}");
+        return 0;
+    }
+    n
+}
+
 pub fn stream_senders(
     slot: &Mutex<HandleSlot>,
+    cache: &Cache,
     host: String,
     port: u16,
     auth: ImapAuth,
     mailbox: String,
     scan_limit: Option<u32>,
+    skip_replay: bool,
     on_event: Channel<SenderEvent>,
 ) -> Result<(), ImapError> {
-    let total = {
+    let key = AccountMailbox::new(&host, port, auth.username(), &mailbox);
+
+    // ---- Phase 0: cache replay (no IMAP I/O) --------------------------
+    // Stream cached senders before the IMAP socket is even opened so the
+    // bubbles paint instantly on every launch after the first. When
+    // `skip_replay` is set (IDLE-triggered refresh, where the UI already
+    // holds the cached state) we still load cached records into the
+    // in-memory accumulator so Phase 2's `merge_into` has prior context
+    // for display-name and latest-UID resolution — we just don't waste
+    // IPC re-sending senders the UI already has.
+    let cached_meta = cache.read_meta(&key).ok().flatten();
+    let cached_records = cache.list_records(&key).unwrap_or_default();
+    let mut effective_uid_set: HashSet<u32> =
+        cached_records.iter().map(|r| r.uid).collect();
+    let mut effective_max = effective_uid_set.iter().copied().max().unwrap_or(0);
+
+    let mut acc: HashMap<String, SenderSummary> = HashMap::new();
+    let had_cache = !cached_records.is_empty();
+    if had_cache {
+        if skip_replay {
+            let _ = merge_into(&mut acc, cached_records.iter().cloned());
+        } else {
+            let total = cached_records.len() as u32;
+            let _ = on_event.send(SenderEvent::Started { total, scan: total });
+            const REPLAY_CHUNK: usize = 200;
+            for chunk in cached_records.chunks(REPLAY_CHUNK) {
+                let delta = merge_into(&mut acc, chunk.iter().cloned());
+                if !delta.is_empty() {
+                    let _ = on_event.send(SenderEvent::Chunk { senders: delta });
+                }
+            }
+        }
+    }
+    let prior_unread: HashMap<u32, bool> = cached_records
+        .iter()
+        .map(|r| (r.uid, r.is_unread))
+        .collect();
+    drop(cached_records);
+
+    // ---- Phase 1: connect & UIDVALIDITY check -------------------------
+    let server_box = {
         let mut g = slot.lock().expect("imap state poisoned");
         match g.refresh_mailbox(&host, port, &auth, &mailbox) {
-            Ok(m) => m.exists,
+            Ok(m) => m,
             Err(e) => {
                 g.invalidate();
                 return Err(e);
             }
         }
     };
-    if total == 0 {
-        let _ = on_event.send(SenderEvent::Started { total: 0, scan: 0 });
+    let server_uid_validity = server_box.uid_validity.unwrap_or(0);
+    let server_uid_next = server_box.uid_next;
+    let server_exists = server_box.exists;
+
+    let validity_changed = cached_meta
+        .as_ref()
+        .map(|m| m.uid_validity != server_uid_validity)
+        .unwrap_or(false);
+    if validity_changed {
+        // The server rotated UID space — every UID we cached is now
+        // ambiguous. Drop everything and treat this as a cold sync.
+        if let Err(e) = cache.drop_mailbox(&key) {
+            eprintln!("envelope cache: drop_mailbox failed: {e}");
+        }
+        acc.clear();
+        effective_max = 0;
+        effective_uid_set.clear();
+        let scan = scan_limit
+            .map(|l| l.min(server_exists))
+            .unwrap_or(server_exists);
+        let _ = on_event.send(SenderEvent::Started { total: server_exists, scan });
+    } else if !had_cache {
+        let scan = scan_limit
+            .map(|l| l.min(server_exists))
+            .unwrap_or(server_exists);
+        let _ = on_event.send(SenderEvent::Started { total: server_exists, scan });
+    }
+
+    if server_exists == 0 {
+        if !effective_uid_set.is_empty() {
+            let uids: Vec<u32> = effective_uid_set.iter().copied().collect();
+            if let Err(e) = cache.delete_uids(&key, &uids) {
+                eprintln!("envelope cache: delete_uids failed: {e}");
+            }
+        }
+        let _ = cache.write_meta(
+            &key,
+            &MailboxMeta {
+                uid_validity: server_uid_validity,
+                uid_next: server_uid_next,
+                exists_count: Some(0),
+                last_synced_at: now_unix(),
+            },
+        );
         let _ = on_event.send(SenderEvent::Done);
         return Ok(());
     }
 
-    let n = scan_limit.unwrap_or(500).min(total);
-    let _ = on_event.send(SenderEvent::Started { total, scan: n });
-
-    let seq_start = total - n + 1;
-    let mut acc: HashMap<String, SenderSummary> = HashMap::new();
-
-    // Walk newest → oldest so the first paint shows the most recent senders.
-    // Lock the session once per page and release between pages, so a
-    // foreground click during streaming waits at most one page.
-    let mut hi = total;
-    loop {
-        let lo = hi.saturating_sub(STREAM_PAGE - 1).max(seq_start);
-        let range = format!("{lo}:{hi}");
-
-        let delta = run_with_session(slot, &host, port, &auth, &mailbox, |session| {
-            let fetches = session
-                .fetch(&range, "(ENVELOPE FLAGS UID)")
-                .map_err(|e| ImapError::Fetch(format!("{e}: {e:?}")))?;
-            let records = fetches.iter().filter_map(record_from_fetch);
-            Ok(merge_into(&mut acc, records))
-        })?;
-
-        if !delta.is_empty() {
-            let _ = on_event.send(SenderEvent::Chunk { senders: delta });
+    // ---- Phase 2: delta fetch -----------------------------------------
+    if effective_max == 0 {
+        // Cold sync: scan a sequence-number window of the newest N
+        // messages. Mirrors the original (pre-cache) behaviour exactly,
+        // and respects scan_limit so a 50k-message inbox doesn't DoS
+        // itself on first launch.
+        let n = scan_limit
+            .map(|l| l.min(server_exists))
+            .unwrap_or(server_exists);
+        let seq_start = server_exists.saturating_sub(n) + 1;
+        let mut hi = server_exists;
+        let mut skipped_pages: u32 = 0;
+        loop {
+            let lo = hi.saturating_sub(STREAM_PAGE - 1).max(seq_start);
+            let range = format!("{lo}:{hi}");
+            let envs =
+                match fetch_envelope_range(slot, &host, port, &auth, &mailbox, &range, false) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        eprintln!(
+                            "imap stream_senders: fetch failed for range {range}, skipping: {e}"
+                        );
+                        skipped_pages += 1;
+                        Vec::new()
+                    }
+                };
+            if !envs.is_empty() {
+                if let Err(e) = cache.upsert_envelopes(&key, &envs) {
+                    eprintln!("envelope cache: upsert failed: {e}");
+                }
+                let records: Vec<EnvelopeRecord> =
+                    envs.iter().filter_map(record_from_envelope).collect();
+                let delta = merge_into(&mut acc, records);
+                if !delta.is_empty() {
+                    let _ = on_event.send(SenderEvent::Chunk { senders: delta });
+                }
+            }
+            if lo == seq_start {
+                break;
+            }
+            hi = lo - 1;
+        }
+        if skipped_pages > 0 {
+            eprintln!(
+                "imap stream_senders: cold sync finished with {skipped_pages} skipped page(s) out of {} total pages",
+                (n + STREAM_PAGE - 1) / STREAM_PAGE
+            );
+        }
+    } else {
+        // Warm sync: only fetch new UIDs above what we already cached,
+        // detect expunges via UID SEARCH ALL, refresh flags so the
+        // unread badges stay correct without re-FETCHing whole envelopes.
+        let new_uids =
+            search_new_uids(slot, &host, port, &auth, &mailbox, effective_max)
+                .unwrap_or_else(|e| {
+                    eprintln!("imap stream_senders: new-UID search failed: {e}");
+                    Vec::new()
+                });
+        for chunk in new_uids.chunks(STREAM_PAGE as usize) {
+            let set = uid_set_string(chunk);
+            let envs = match fetch_envelope_range(
+                slot, &host, port, &auth, &mailbox, &set, true,
+            ) {
+                Ok(e) => e,
+                Err(e) => {
+                    eprintln!("imap stream_senders: new-UID fetch failed: {e}");
+                    Vec::new()
+                }
+            };
+            if !envs.is_empty() {
+                if let Err(e) = cache.upsert_envelopes(&key, &envs) {
+                    eprintln!("envelope cache: upsert failed: {e}");
+                }
+                effective_uid_set.extend(envs.iter().map(|e| e.uid));
+                let records: Vec<EnvelopeRecord> =
+                    envs.iter().filter_map(record_from_envelope).collect();
+                let delta = merge_into(&mut acc, records);
+                if !delta.is_empty() {
+                    let _ = on_event.send(SenderEvent::Chunk { senders: delta });
+                }
+            }
         }
 
-        if lo == seq_start {
-            break;
+        let mut needs_resettle = false;
+
+        let server_uids = search_all_uids(slot, &host, port, &auth, &mailbox)
+            .unwrap_or_else(|e| {
+                eprintln!("imap stream_senders: UID SEARCH ALL failed: {e}");
+                HashSet::new()
+            });
+        if !server_uids.is_empty() {
+            let expunged: Vec<u32> = effective_uid_set
+                .iter()
+                .filter(|u| !server_uids.contains(u))
+                .copied()
+                .collect();
+            if !expunged.is_empty() {
+                if let Err(e) = cache.delete_uids(&key, &expunged) {
+                    eprintln!("envelope cache: delete_uids failed: {e}");
+                }
+                for u in &expunged {
+                    effective_uid_set.remove(u);
+                }
+                needs_resettle = true;
+            }
         }
-        hi = lo - 1;
+
+        let still_present: Vec<u32> = effective_uid_set.iter().copied().collect();
+        let changed = refresh_flags(
+            slot,
+            &host,
+            port,
+            &auth,
+            &mailbox,
+            &still_present,
+            cache,
+            &key,
+            &prior_unread,
+        );
+        if changed > 0 {
+            needs_resettle = true;
+        }
+
+        // After warm sync we rebuild the full sender list from the
+        // current cache and emit it as one chunk. The frontend's
+        // `mergeSenders` keys by sender so updated counts replace
+        // stale ones for any (mailbox,host) we still know about.
+        // Known limitation: a sender whose every message was expunged
+        // can't be removed by the frontend through this channel — its
+        // bubble lingers as a zero-count ghost until full reload.
+        if needs_resettle {
+            let fresh = cache.list_records(&key).unwrap_or_default();
+            let mut new_acc: HashMap<String, SenderSummary> = HashMap::new();
+            let _ = merge_into(&mut new_acc, fresh.into_iter());
+            let senders: Vec<SenderSummary> = new_acc.into_values().collect();
+            if !senders.is_empty() {
+                let _ = on_event.send(SenderEvent::Chunk { senders });
+            }
+        }
+    }
+
+    if let Err(e) = cache.write_meta(
+        &key,
+        &MailboxMeta {
+            uid_validity: server_uid_validity,
+            uid_next: server_uid_next,
+            exists_count: Some(server_exists),
+            last_synced_at: now_unix(),
+        },
+    ) {
+        eprintln!("envelope cache: write_meta failed: {e}");
     }
 
     let _ = on_event.send(SenderEvent::Done);
@@ -650,26 +1029,41 @@ fn fallback_client_side_filter(
 
 pub fn fetch_body(
     slot: &Mutex<HandleSlot>,
+    cache: &Cache,
     host: String,
     port: u16,
     auth: ImapAuth,
     mailbox: String,
     uid: u32,
 ) -> Result<EmailBody, ImapError> {
-    run_with_session(slot, &host, port, &auth, &mailbox, |session| {
+    let key = AccountMailbox::new(&host, port, auth.username(), &mailbox);
+
+    let (body, server_flags) = run_with_session(slot, &host, port, &auth, &mailbox, |session| {
         // BODY[] (without .PEEK) atomically sets the \Seen flag on the
         // server as part of the same round trip — that's the standard
         // "open mail = mark read" behaviour every regular mail client
-        // does. We mirror the flag change in local state on the JS side.
+        // does. Asking for FLAGS in the same FETCH gets us the server's
+        // post-mutation flag set in one round trip, which we then write
+        // through to the cache so the next launch's Phase 0 replay
+        // doesn't show this message as unread.
         let fetches = session
-            .uid_fetch(uid.to_string(), "(BODY[] UID)")
+            .uid_fetch(uid.to_string(), "(BODY[] UID FLAGS)")
             .map_err(|e| ImapError::Fetch(format!("{e}: {e:?}")))?;
         let f = fetches.iter().next().ok_or(ImapError::NotFound(uid))?;
         let raw = f
             .body()
             .ok_or_else(|| ImapError::Fetch("no body part returned".into()))?;
-        build_email_body(uid, raw)
-    })
+        let flags: Vec<String> = f.flags().iter().map(flag_to_string).collect();
+        Ok((build_email_body(uid, raw)?, flags))
+    })?;
+
+    // Best-effort cache write — a cache failure must not abort the
+    // user-facing body fetch. Logged so a persistent issue is visible.
+    if let Err(e) = cache.update_flags(&key, &[(uid, server_flags)]) {
+        eprintln!("envelope cache: update_flags after fetch_body failed: {e}");
+    }
+
+    Ok(body)
 }
 
 pub(crate) fn build_email_body(uid: u32, raw: &[u8]) -> Result<EmailBody, ImapError> {

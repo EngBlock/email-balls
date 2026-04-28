@@ -1,4 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export interface EmailAddress {
   name: string | null;
@@ -114,14 +115,35 @@ export function streamSenders(
   account: AccountConn,
   scanLimit: number | undefined,
   onEvent: (event: SenderEvent) => void,
+  options?: { skipReplay?: boolean },
 ): Promise<void> {
   const channel = new Channel<SenderEvent>();
   channel.onmessage = onEvent;
   return invoke<void>("stream_senders", {
     ...account,
     scanLimit,
+    skipReplay: options?.skipReplay ?? false,
     onEvent: channel,
   });
+}
+
+/** Start the backend IMAP IDLE worker for this account+mailbox. The
+ *  worker opens its own IMAP session and emits `imap-update` Tauri
+ *  events whenever the server reports a mailbox change. Idempotent for
+ *  the same fingerprint — safe to call on every connect. */
+export function startImapIdle(account: AccountConn): Promise<void> {
+  return invoke<void>("start_imap_idle", { ...account });
+}
+
+export function stopImapIdle(): Promise<void> {
+  return invoke<void>("stop_imap_idle");
+}
+
+/** Subscribe to backend IDLE notifications. The callback fires once
+ *  per server-reported mailbox change (debounced upstream is the
+ *  caller's job). Returns the unlisten handle. */
+export function onImapUpdate(callback: () => void): Promise<UnlistenFn> {
+  return listen("imap-update", () => callback());
 }
 
 function senderKey(s: SenderSummary): string {
@@ -172,17 +194,17 @@ export function fetchEmailBody(
 // backend with `mailbox: null` — render them as just the host so we
 // don't show "@vercel.com" in tooltips or hash a bare-`@` string for
 // avatars. Per-mailbox bubbles still render the full address.
-export function senderLabel(s: SenderSummary): string {
-  if (s.displayName) return s.displayName;
+function formatSenderAddress(s: SenderSummary): string {
   const m = s.address.mailbox ?? "";
   const h = s.address.host ?? "";
   if (!m && h) return h;
   return h ? `${m}@${h}` : m;
 }
 
+export function senderLabel(s: SenderSummary): string {
+  return s.displayName ?? formatSenderAddress(s);
+}
+
 export function senderEmail(s: SenderSummary): string {
-  const m = s.address.mailbox ?? "";
-  const h = s.address.host ?? "";
-  if (!m && h) return h;
-  return h ? `${m}@${h}` : m;
+  return formatSenderAddress(s);
 }

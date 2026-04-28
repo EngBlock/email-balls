@@ -1,4 +1,4 @@
-import { useCallback, useReducer, useRef } from "react";
+import { memo, useCallback, useRef } from "react";
 import { forceSimulation, type Simulation } from "d3-force";
 import { quadtree, type QuadtreeLeaf } from "d3-quadtree";
 import { AnimatePresence, motion } from "framer-motion";
@@ -6,6 +6,33 @@ import { AnimatePresence, motion } from "framer-motion";
 import { resolveAvatarForSender } from "../lib/avatar";
 import { hashColor } from "../lib/gravatar";
 import { senderEmail, senderLabel, type SenderSummary } from "../lib/imap";
+
+// Hoisted to module scope so every <motion.button> sees the same object
+// identity across renders. Inline literals would be a fresh object each
+// render and force Framer Motion to re-evaluate variants and transitions
+// on every bubble — measurably slow at hundreds of bubbles.
+const BUBBLE_INITIAL = { scale: 0, opacity: 0 };
+const BUBBLE_ANIMATE = { scale: 1, opacity: 1 };
+const BUBBLE_EXIT = { scale: 0, opacity: 0 };
+const BUBBLE_HOVER = { scale: 1.08 };
+const BUBBLE_TAP = { scale: 0.95 };
+const BUBBLE_TRANSITION = {
+  type: "spring" as const,
+  stiffness: 220,
+  damping: 18,
+};
+const BUBBLE_BUTTON_STYLE: React.CSSProperties = {
+  width: "100%",
+  height: "100%",
+  margin: 0,
+  padding: 0,
+  borderRadius: "50%",
+  border: "1px solid rgba(255, 255, 255, 0.35)",
+  boxShadow: "0 4px 14px rgba(0, 0, 0, 0.25)",
+  background: "transparent",
+  cursor: "pointer",
+  display: "block",
+};
 
 interface BubbleNode {
   key: string;
@@ -214,6 +241,10 @@ interface Props {
    *  intercepting clicks but stay in the simulation, so positions
    *  persist when the filter clears. */
   searchQuery?: string;
+  /** When true, hide bubbles whose unreadCount is zero. Composes with
+   *  `searchQuery` (both must pass). Same fade-out treatment as the
+   *  search filter so positions persist. */
+  unreadOnly?: boolean;
 }
 
 function senderMatchesQuery(s: SenderSummary, query: string): boolean {
@@ -224,21 +255,168 @@ function senderMatchesQuery(s: SenderSummary, query: string): boolean {
   return label.includes(q) || email.includes(q);
 }
 
-export function SenderBubbles({ senders, onPick, searchQuery = "" }: Props) {
+function senderVisible(
+  s: SenderSummary,
+  query: string,
+  unreadOnly: boolean,
+): boolean {
+  if (unreadOnly && s.unreadCount === 0) return false;
+  return senderMatchesQuery(s, query);
+}
+
+/// Write the visibility state for one bubble straight to the DOM, only
+/// touching properties that actually need to change. Re-applying the
+/// same string is cheap but still triggers a style recalc — short-circuit.
+function applyVisibility(
+  elem: HTMLElement,
+  s: SenderSummary,
+  query: string,
+  unreadOnly: boolean,
+) {
+  const hidden = !senderVisible(s, query, unreadOnly);
+  const opacity = hidden ? "0" : "1";
+  const pointerEvents = hidden ? "none" : "auto";
+  if (elem.style.opacity !== opacity) elem.style.opacity = opacity;
+  if (elem.style.pointerEvents !== pointerEvents)
+    elem.style.pointerEvents = pointerEvents;
+}
+
+interface BubbleProps {
+  /** The simulation node. Identity is stable per bubble; mutations on
+   *  `node.sender`/`node.r`/`node.avatar` are reflected via the
+   *  separate `r` / `sender` props (which carry fresh references when
+   *  they change), and via the imperative avatar/transform writes from
+   *  the parent. Hover handlers read pin state straight off `node`. */
+  node: BubbleNode;
+  r: number;
+  sender: SenderSummary;
+  onPick: (s: SenderSummary) => void;
+  bubbleRef: (el: HTMLDivElement | null) => void;
+}
+
+const Bubble = memo(function Bubble({
+  node,
+  r,
+  sender,
+  onPick,
+  bubbleRef,
+}: BubbleProps) {
+  return (
+    <div
+      ref={bubbleRef}
+      data-key={node.key}
+      style={{
+        position: "absolute",
+        left: 0,
+        top: 0,
+        width: r * 2,
+        height: r * 2,
+        borderRadius: "50%",
+        backgroundColor: node.color,
+        // Initial avatar value at mount; subsequent avatar resolution
+        // writes elem.style.backgroundImage imperatively.
+        backgroundImage: node.avatar ? `url(${node.avatar})` : "none",
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+        // opacity and pointerEvents are *not* set here — they are
+        // applied imperatively by `applyVisibility` on mount and on
+        // search/unread-filter changes, so toggling the filter does no
+        // React work.
+        transition: "opacity 180ms ease",
+        willChange: "transform, opacity",
+      }}
+    >
+      <motion.button
+        type="button"
+        onClick={() => onPick(sender)}
+        onHoverStart={() => {
+          if (isPinned(node)) return;
+          node.savedVx = node.vx ?? 0;
+          node.savedVy = node.vy ?? 0;
+          node.fx = node.x ?? 0;
+          node.fy = node.y ?? 0;
+        }}
+        onHoverEnd={() => {
+          node.fx = null;
+          node.fy = null;
+          node.vx = node.savedVx ?? 0;
+          node.vy = node.savedVy ?? 0;
+        }}
+        style={BUBBLE_BUTTON_STYLE}
+        initial={BUBBLE_INITIAL}
+        animate={BUBBLE_ANIMATE}
+        exit={BUBBLE_EXIT}
+        transition={BUBBLE_TRANSITION}
+        whileHover={BUBBLE_HOVER}
+        whileTap={BUBBLE_TAP}
+        aria-label={senderLabel(sender)}
+        title={`${senderLabel(sender)} · ${sender.messageCount} messages${
+          sender.unreadCount > 0 ? ` (${sender.unreadCount} unread)` : ""
+        }`}
+      />
+      {sender.unreadCount > 0 && <UnreadBadge count={sender.unreadCount} />}
+    </div>
+  );
+});
+
+const UnreadBadge = memo(function UnreadBadge({ count }: { count: number }) {
+  const label = count > 99 ? "99+" : String(count);
+  // Width = height keeps the badge a perfect circle. Step the size up
+  // with digit count so multi-digit numbers still fit.
+  const size = label.length >= 3 ? 24 : label.length === 2 ? 20 : 18;
+  return (
+    <div
+      aria-hidden
+      style={{
+        position: "absolute",
+        top: -4,
+        right: -4,
+        width: size,
+        height: size,
+        borderRadius: "50%",
+        background: "#ff4d4f",
+        color: "white",
+        fontSize: label.length >= 3 ? 9 : 11,
+        fontWeight: 600,
+        lineHeight: `${size}px`,
+        textAlign: "center",
+        boxShadow: "0 2px 6px rgba(0, 0, 0, 0.4)",
+        border: "1.5px solid rgba(20, 20, 20, 0.9)",
+        boxSizing: "border-box",
+        pointerEvents: "none",
+      }}
+    >
+      {label}
+    </div>
+  );
+});
+
+export function SenderBubbles({
+  senders,
+  onPick,
+  searchQuery = "",
+  unreadOnly = false,
+}: Props) {
   // Mutable state lives in refs so renders are cheap and the d3 tick can
   // write straight to the DOM without going through React.
   const nodesRef = useRef<BubbleNode[]>([]);
+  const nodesByKeyRef = useRef<Map<string, BubbleNode>>(new Map());
   const sizeRef = useRef({ w: 800, h: 600 });
   const simRef = useRef<Simulation<BubbleNode, undefined> | null>(null);
   const elemsRef = useRef<Map<string, HTMLDivElement>>(new Map());
   const lastSendersRef = useRef<SenderSummary[] | null>(null);
-  const [, bumpRender] = useReducer((n: number) => n + 1, 0);
+  // The most recently *applied* filter. Drives the bubbleRef-mount
+  // visibility apply (so a bubble that mounts while the filter is on
+  // paints hidden immediately) and lets us short-circuit the
+  // render-time imperative pass when nothing changed.
+  const filterRef = useRef({ searchQuery: "", unreadOnly: false });
 
   // --- Render-phase reconciliation (no effect) -----------------------------
   // Diff senders → nodes whenever the senders prop identity changes. Mutating
   // refs during render is allowed; the side-effecting work (sim.nodes /
   // sim.alpha) is acting on an external system, not React state.
-  if (lastSendersRef.current !== senders) {
+  const sendersChanged = lastSendersRef.current !== senders;
+  if (sendersChanged) {
     const existing = new Map(nodesRef.current.map((n) => [n.key, n]));
     const next: BubbleNode[] = [];
     let added = false;
@@ -271,17 +449,23 @@ export function SenderBubbles({ senders, onPick, searchQuery = "" }: Props) {
         };
         next.push(node);
         // Resolve the avatar out of band — BIMI lookup hits the Rust
-        // disk cache first, falls back to Gravatar. Bump a render
-        // counter once we have the URL so the backgroundImage paints.
+        // disk cache first, falls back to Gravatar. Write the
+        // backgroundImage straight to the wrapper element rather than
+        // re-rendering the bubble tree, since the d3 tick is already
+        // mutating these elements directly. Avoids an O(N²) cascade of
+        // re-renders when N senders resolve in quick succession on
+        // initial load.
         resolveAvatarForSender(s).then(({ url }) => {
           node.avatar = url;
-          bumpRender();
+          const elem = elemsRef.current.get(key);
+          if (elem) elem.style.backgroundImage = `url(${url})`;
         });
         added = true;
       }
     }
     const removed = existing.size > 0;
     nodesRef.current = next;
+    nodesByKeyRef.current = new Map(next.map((n) => [n.key, n]));
     lastSendersRef.current = senders;
 
     const sim = simRef.current;
@@ -289,6 +473,26 @@ export function SenderBubbles({ senders, onPick, searchQuery = "" }: Props) {
       sim.nodes(next);
       if (added || removed) sim.alpha(0.4).restart();
     }
+  }
+
+  // --- Imperative visibility apply -----------------------------------------
+  // Filter changes (search/unreadOnly) and sender data updates (which can
+  // flip a bubble's `unreadCount` to/from zero) both want the same thing:
+  // re-evaluate every bubble's visibility and write it straight to the DOM.
+  // Doing this here — at render time, side-effecting an external system —
+  // means the memoised <Bubble> children skip React reconciliation entirely
+  // when only the filter toggles. Newly-mounted bubbles get their initial
+  // visibility from the bubbleRef callback below using `filterRef`.
+  const filterChanged =
+    filterRef.current.searchQuery !== searchQuery ||
+    filterRef.current.unreadOnly !== unreadOnly;
+  if (sendersChanged || filterChanged) {
+    for (const n of nodesRef.current) {
+      const elem = elemsRef.current.get(n.key);
+      if (!elem) continue;
+      applyVisibility(elem, n.sender, searchQuery, unreadOnly);
+    }
+    filterRef.current = { searchQuery, unreadOnly };
   }
 
   // --- Container lifecycle (ref callback, no effect) -----------------------
@@ -342,15 +546,38 @@ export function SenderBubbles({ senders, onPick, searchQuery = "" }: Props) {
     };
   }, []);
 
-  // Per-bubble ref callback — register/unregister DOM elements so the d3
-  // tick can write transforms straight to them.
-  const bubbleRefFor = useCallback(
-    (key: string) => (el: HTMLDivElement | null) => {
-      if (el) elemsRef.current.set(key, el);
-      else elemsRef.current.delete(key);
-    },
-    [],
-  );
+  // Single stable ref callback shared across all bubbles — reads the
+  // node key off `data-key` to register/unregister into `elemsRef`.
+  // Reusing one closure (rather than minting a per-key one each render)
+  // means React doesn't re-run N callbacks every time the parent
+  // re-renders. On mount we also paint the current filter directly
+  // onto the new element so a bubble that appears while a filter is
+  // active never flashes visible-then-hidden.
+  const bubbleRef = useCallback((el: HTMLDivElement | null) => {
+    if (el) {
+      const key = el.dataset.key;
+      if (!key) return;
+      elemsRef.current.set(key, el);
+      const node = nodesByKeyRef.current.get(key);
+      if (node) {
+        applyVisibility(
+          el,
+          node.sender,
+          filterRef.current.searchQuery,
+          filterRef.current.unreadOnly,
+        );
+      }
+    } else {
+      // React calls the cleanup callback with null and the element it
+      // was previously attached to is no longer reachable from here.
+      // We instead sweep elemsRef by checking which entries still
+      // point to a connected element. Cheap because there are at most
+      // N entries and this only fires on unmount.
+      for (const [k, v] of elemsRef.current) {
+        if (!v.isConnected) elemsRef.current.delete(k);
+      }
+    }
+  }, []);
 
   return (
     <div
@@ -366,101 +593,16 @@ export function SenderBubbles({ senders, onPick, searchQuery = "" }: Props) {
       }}
     >
       <AnimatePresence>
-        {nodesRef.current.map((n) => {
-          const hidden = !senderMatchesQuery(n.sender, searchQuery);
-          return (
-          <div
+        {nodesRef.current.map((n) => (
+          <Bubble
             key={n.key}
-            ref={bubbleRefFor(n.key)}
-            style={{
-              position: "absolute",
-              left: 0,
-              top: 0,
-              width: n.r * 2,
-              height: n.r * 2,
-              opacity: hidden ? 0 : 1,
-              pointerEvents: hidden ? "none" : "auto",
-              transition: "opacity 180ms ease",
-              willChange: "transform, opacity",
-            }}
-          >
-            <motion.button
-              type="button"
-              onClick={() => onPick(n.sender)}
-              onHoverStart={() => {
-                if (isPinned(n)) return;
-                n.savedVx = n.vx ?? 0;
-                n.savedVy = n.vy ?? 0;
-                n.fx = n.x ?? 0;
-                n.fy = n.y ?? 0;
-              }}
-              onHoverEnd={() => {
-                n.fx = null;
-                n.fy = null;
-                // Restore the drift the ball had when we paused it so it
-                // doesn't sit dead until thermal noise picks it back up.
-                n.vx = n.savedVx ?? 0;
-                n.vy = n.savedVy ?? 0;
-              }}
-              style={{
-                width: "100%",
-                height: "100%",
-                margin: 0,
-                padding: 0,
-                borderRadius: "50%",
-                border: "1px solid rgba(255, 255, 255, 0.35)",
-                boxShadow: "0 4px 14px rgba(0, 0, 0, 0.25)",
-                backgroundColor: n.color,
-                backgroundImage: n.avatar ? `url(${n.avatar})` : "none",
-                backgroundSize: "cover",
-                backgroundPosition: "center",
-                cursor: "pointer",
-                display: "block",
-              }}
-              initial={{ scale: 0, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0, opacity: 0 }}
-              transition={{ type: "spring", stiffness: 220, damping: 18 }}
-              whileHover={{ scale: 1.08 }}
-              whileTap={{ scale: 0.95 }}
-              aria-label={senderLabel(n.sender)}
-              title={`${senderLabel(n.sender)} · ${n.sender.messageCount} messages${n.sender.unreadCount > 0 ? ` (${n.sender.unreadCount} unread)` : ""}`}
-            />
-            {n.sender.unreadCount > 0 && (() => {
-              const label =
-                n.sender.unreadCount > 99 ? "99+" : String(n.sender.unreadCount);
-              // Width = height keeps the badge a perfect circle. Step the
-              // size up with digit count so multi-digit numbers still fit.
-              const size = label.length >= 3 ? 24 : label.length === 2 ? 20 : 18;
-              return (
-                <div
-                  aria-hidden
-                  style={{
-                    position: "absolute",
-                    top: -4,
-                    right: -4,
-                    width: size,
-                    height: size,
-                    borderRadius: "50%",
-                    background: "#ff4d4f",
-                    color: "white",
-                    fontSize: label.length >= 3 ? 9 : 11,
-                    fontWeight: 600,
-                    lineHeight: `${size}px`,
-                    textAlign: "center",
-                    boxShadow: "0 2px 6px rgba(0, 0, 0, 0.4)",
-                    border: "1.5px solid rgba(20, 20, 20, 0.9)",
-                    boxSizing: "border-box",
-                    pointerEvents: "none",
-                  }}
-                >
-                  {label}
-                </div>
-              );
-            })()}
-          </div>
-          );
-        })}
+            node={n}
+            r={n.r}
+            sender={n.sender}
+            onPick={onPick}
+            bubbleRef={bubbleRef}
+          />
+        ))}
       </AnimatePresence>
     </div>
   );

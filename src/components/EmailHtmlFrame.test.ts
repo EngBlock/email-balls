@@ -43,6 +43,35 @@ describe("sanitize", () => {
     );
     expect(out).toMatch(/style="[^"]*color:\s*red/i);
   });
+
+  it("parks <a href> on data-href and replaces href with '#'", () => {
+    const out = sanitize(
+      '<a href="https://example.com/x">click</a>',
+      new Map(),
+    );
+    expect(out).toContain('data-href="https://example.com/x"');
+    expect(out).toMatch(/href="#"/);
+    // The original https URL must not survive as a navigable href —
+    // otherwise the iframe could navigate before our click handler
+    // routes the click through the system browser. (The data-href
+    // assertion above carries the URL; this rules out a *navigable*
+    // href, which would not be preceded by "data-".)
+    expect(out).not.toMatch(/(?<!data-)href="https:\/\/example\.com\/x"/);
+  });
+
+  it("rewrites mailto: hrefs the same way", () => {
+    const out = sanitize('<a href="mailto:a@b.com">x</a>', new Map());
+    expect(out).toContain('data-href="mailto:a@b.com"');
+    expect(out).toMatch(/href="#"/);
+  });
+
+  it("strips target attribute so target=_blank can't trigger a Tauri popup", () => {
+    const out = sanitize(
+      '<a href="https://example.com" target="_blank">x</a>',
+      new Map(),
+    );
+    expect(out).not.toMatch(/target=/i);
+  });
 });
 
 describe("collapseQuotes", () => {

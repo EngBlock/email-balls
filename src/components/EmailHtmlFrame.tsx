@@ -56,13 +56,22 @@ export function EmailHtmlFrame({ html, inlineParts, showRemoteImages }: Props) {
 
     const onLoad = () => {
       const doc = iframe.contentDocument;
-      if (!doc) return;
+      if (!doc) {
+        console.warn(
+          "[EmailHtmlFrame] iframe load fired but contentDocument is null — sandbox is missing allow-same-origin?",
+        );
+        return;
+      }
+      console.debug("[EmailHtmlFrame] binding click handler", {
+        readyState: doc.readyState,
+      });
 
       const measure = () => {
         if (cancelled) return;
-        // Cap at 8000px so a runaway document doesn't push the layout
-        // into territory where the parent scroll container chokes.
-        const next = Math.min(8000, doc.documentElement.scrollHeight);
+        // Cap at 50000px so a runaway document can't blow up layout,
+        // but generous enough that real-world long marketing emails
+        // and threaded replies aren't clipped.
+        const next = Math.min(50000, doc.documentElement.scrollHeight);
         setHeight((prev) => (Math.abs(prev - next) > 1 ? next : prev));
       };
 
@@ -77,27 +86,46 @@ export function EmailHtmlFrame({ html, inlineParts, showRemoteImages }: Props) {
       observer = new ResizeObserver(measure);
       observer.observe(doc.documentElement);
 
-      // Capture-phase click handler so links open in the system browser
-      // via Tauri's opener plugin instead of trying to navigate the
-      // (sandboxed, networkless) iframe. mailto:/tel: are handed off
-      // identically — the OS picks the right handler.
-      doc.addEventListener(
-        "click",
-        (event) => {
-          const target = (event.target as Element | null)?.closest("a");
-          if (!target) return;
-          const href = target.getAttribute("href");
-          if (!href) return;
-          event.preventDefault();
-          if (/^(?:https?|mailto|tel):/i.test(href)) {
-            void openUrl(href);
-          }
-        },
-        true,
-      );
+      // Capture-phase handlers route every link click through Tauri's
+      // opener so the system browser owns the navigation. Without this,
+      // an `<a href>` click in the sandboxed iframe would either try to
+      // navigate the (networkless) iframe or — with target="_blank" or
+      // similar — request a popup that the Tauri WebView silently
+      // swallows. We bind on both `mousedown` and `click` because some
+      // WebKit builds initiate the popup attempt on mousedown, which
+      // races a click-only handler.
+      const onLinkActivation = (event: Event) => {
+        const target = (event.target as Element | null)?.closest("a");
+        if (!target) return;
+        // Real href is parked on data-href during sanitize so the
+        // <a> can't navigate the iframe even if the click handler
+        // races a Tauri-WebView popup fallback. See sanitize().
+        const href = target.getAttribute("data-href");
+        console.debug("[EmailHtmlFrame] link activation", {
+          type: event.type,
+          href,
+        });
+        event.preventDefault();
+        if (!href) return;
+        if (/^(?:https?|mailto|tel):/i.test(href)) {
+          openUrl(href).catch((err) => {
+            console.error("[EmailHtmlFrame] openUrl failed:", href, err);
+          });
+        }
+      };
+      doc.addEventListener("click", onLinkActivation, true);
+      doc.addEventListener("auxclick", onLinkActivation, true);
     };
 
     iframe.addEventListener("load", onLoad);
+    // srcdoc documents load synchronously: by the time this effect
+    // runs the iframe's load event may already have fired, leaving
+    // our click handler unbound (so links would silently do nothing).
+    // If contentDocument is already complete, call onLoad now; the
+    // listener stays in place for any subsequent reload.
+    if (iframe.contentDocument?.readyState === "complete") {
+      onLoad();
+    }
     return () => {
       cancelled = true;
       iframe.removeEventListener("load", onLoad);
@@ -136,13 +164,21 @@ function buildDocument(
   const sanitized = sanitize(rawHtml, cidMap);
   const collapsed = collapseQuotes(sanitized);
   const csp = buildCsp(showRemoteImages);
+  // overflow-y: hidden on html+body suppresses the iframe's own
+  // vertical scrollbar — the surrounding drawer is the only vertical
+  // scroll surface, and we size the iframe to documentElement
+  // scrollHeight so nothing should ever be clipped vertically.
+  // overflow-x stays default so wide marketing tables and big inline
+  // images keep their horizontal scrollbar inside the iframe instead
+  // of squashing or breaking layout. The body's padding-bottom leaves
+  // room so the horizontal scrollbar doesn't sit on top of content.
   const baseStyles = `
     html, body { margin: 0; padding: 12px 16px; background: #ffffff;
       color: #1a1a1a; font: 14px/1.5 -apple-system, BlinkMacSystemFont,
       "Segoe UI", Roboto, sans-serif; word-wrap: break-word;
-      overflow-wrap: anywhere; }
+      overflow-wrap: anywhere; overflow-y: hidden; }
+    body { padding-bottom: 28px; }
     img { max-width: 100%; height: auto; }
-    table { max-width: 100%; }
     a { color: #0a66c2; }
     blockquote { margin: 0 0 0 12px; padding-left: 12px;
       border-left: 3px solid rgba(0, 0, 0, 0.12); color: #4a4a4a; }
@@ -151,15 +187,14 @@ function buildDocument(
       color: #5a5a5a; padding: 4px 0; list-style: none; user-select: none; }
     details.email-quote > summary::before { content: "··· "; opacity: 0.6; }
   `;
-  // <base target="_blank"> is a defensive default in case our click
-  // listener fails to bind; the iframe sandbox still blocks navigation
-  // within the iframe regardless. The CSP <meta> is the load-bearing
-  // remote-content gate.
+  // No <base target="_blank">: with target=_blank the WebView tries to
+  // spawn a popup which Tauri silently swallows, racing our parent-side
+  // click handler. We rely solely on the capture-phase listener in the
+  // parent (see useEffect) to route links through plugin-opener.
   return `<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="${csp}">
-<base target="_blank">
 <style>${baseStyles}</style>
 </head><body>${collapsed}</body></html>`;
 }
@@ -172,16 +207,23 @@ function buildCsp(showRemoteImages: boolean): string {
   const imgSrc = showRemoteImages
     ? "data: https:"
     : "data:";
+  // frame-ancestors is intentionally omitted here: WebKit logs a noisy
+  // warning that the directive is ignored when delivered via <meta>.
+  // The iframe sandbox already prevents the document from being framed
+  // by anything other than its own iframe, so this directive would only
+  // be cosmetic anyway.
   return [
     "default-src 'none'",
     `img-src ${imgSrc}`,
     "style-src 'unsafe-inline'",
     "font-src data:",
-    "frame-ancestors 'none'",
   ].join("; ");
 }
 
-const SAFE_URI_REGEXP = /^(?:https?|mailto|tel|cid|data):/i;
+// Accepts the schemes we render (https/mailto/tel/cid/data) plus a bare
+// `#` so our inert href="#" rewriting (see hook in sanitize()) is
+// retained — that keeps `<a>` styled as a link in WebKit.
+const SAFE_URI_REGEXP = /^(?:(?:https?|mailto|tel|cid|data):|#)/i;
 
 export function sanitize(rawHtml: string, cidMap: Map<string, string>): string {
   // DOMPurify in JSDOM/browser environments. Hook rewrites cid: URLs
@@ -189,19 +231,49 @@ export function sanitize(rawHtml: string, cidMap: Map<string, string>): string {
   // sanitize completes so other DOMPurify calls in the app aren't
   // affected.
   const hook = (node: Element, data: { attrName: string; attrValue: string }) => {
-    if (data.attrName !== "src" && data.attrName !== "background") return;
-    const value = data.attrValue.trim();
-    if (!value.toLowerCase().startsWith("cid:")) return;
-    const cid = value.slice(4).replace(/^<|>$/g, "");
-    const dataUrl = cidMap.get(cid);
-    if (dataUrl) {
-      data.attrValue = dataUrl;
-    } else {
-      // No matching inline part — drop the attribute so the iframe
-      // doesn't try to fetch `cid:foo` (which the CSP would block but
-      // generates a console warning per image).
-      node.removeAttribute(data.attrName);
+    // 1. Rewrite cid: src/background to data: URLs from cidMap.
+    if (data.attrName === "src" || data.attrName === "background") {
+      const value = data.attrValue.trim();
+      if (value.toLowerCase().startsWith("cid:")) {
+        const cid = value.slice(4).replace(/^<|>$/g, "");
+        const dataUrl = cidMap.get(cid);
+        if (dataUrl) {
+          data.attrValue = dataUrl;
+        } else {
+          // No matching inline part — drop the attribute so the iframe
+          // doesn't try to fetch `cid:foo` (which the CSP would block
+          // but generates a console warning per image).
+          node.removeAttribute(data.attrName);
+          data.attrValue = "";
+        }
+      }
+      return;
+    }
+
+    // 2. Neutralise <a href>: park the real URL on data-href and
+    //    replace href with "#". Without this, Tauri's WebView can
+    //    react to a target=_blank popup attempt by navigating the
+    //    iframe itself before our parent click handler manages to
+    //    preventDefault. With href="#", the link physically cannot
+    //    navigate; the handler reads data-href and routes the URL
+    //    through plugin-opener.
+    if (
+      data.attrName === "href" &&
+      node.tagName === "A" &&
+      /^(?:https?|mailto|tel):/i.test(data.attrValue)
+    ) {
+      node.setAttribute("data-href", data.attrValue);
+      data.attrValue = "#";
+      return;
+    }
+
+    // 3. Strip `target` so the WebView never tries to open a popup
+    //    Tauri can't honour. Belt-and-suspenders given href="#" is
+    //    already inert.
+    if (data.attrName === "target") {
+      node.removeAttribute("target");
       data.attrValue = "";
+      return;
     }
   };
 
