@@ -1,0 +1,52 @@
+name: Feature request
+description: Suggest a new feature or enhancement for Email Balls.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an idea. Before filing, please check existing issues to avoid duplicates.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What problem are you trying to solve, or what is the use case? Focus on the "why" before the "how".
+      placeholder: I have thousands of senders and the bubble layout becomes hard to scan…
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the feature or change you'd like to see.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered (optional)
+      description: Other approaches you've thought about, including workarounds you currently use.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Bubble visualization / UI
+        - IMAP / sync
+        - HTML / plain-text rendering
+        - Credentials / Stronghold
+        - Avatars (BIMI / Gravatar)
+        - Packaging / distribution
+        - Documentation
+        - Other
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context (optional)
+      description: Mockups, links, or anything else that would help.

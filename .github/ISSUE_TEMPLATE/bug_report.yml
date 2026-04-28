@@ -1,0 +1,101 @@
+name: Bug report
+description: Report a defect or unexpected behavior in Email Balls.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Please do **not** include passwords, OAuth tokens, full IMAP server hostnames, or message contents in this report.
+
+        For security-sensitive issues, see [SECURITY.md](../blob/main/SECURITY.md) instead of opening a public issue.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: A clear and concise description of the bug.
+      placeholder: When I click a sender bubble, the message list stays empty…
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps to trigger the bug.
+      placeholder: |
+        1. Launch the app
+        2. Connect to an IMAP account
+        3. Click a bubble for a sender with > 50 messages
+        4. …
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include any error messages or relevant log output. Redact email addresses and server hostnames.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Windows
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version
+      placeholder: "e.g. macOS 14.4, Ubuntu 24.04, Windows 11 23H2"
+
+  - type: input
+    id: app-version
+    attributes:
+      label: Email Balls version / commit
+      description: App version, or the git commit SHA if running from source.
+      placeholder: "e.g. 0.1.0 or commit 03e50d3"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Where does the bug appear?
+      options:
+        - Bubble visualization / UI
+        - IMAP connection / sync
+        - HTML / plain-text rendering
+        - Credentials / Stronghold
+        - Avatars (BIMI / Gravatar)
+        - Build / packaging
+        - Other / not sure
+
+  - type: textarea
+    id: imap-context
+    attributes:
+      label: IMAP provider (optional)
+      description: Provider name only (e.g. Fastmail, Gmail, Proton Bridge, self-hosted Dovecot). Do not paste credentials or full hostnames.
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / screenshots (optional)
+      description: Console output, terminal logs, or screenshots. Redact sensitive data.
