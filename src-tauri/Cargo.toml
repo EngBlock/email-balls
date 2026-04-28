@@ -1,9 +1,15 @@
 [package]
 name = "email-balls"
 version = "0.1.0"
-description = "Email Balls"
-authors = ["you"]
+description = "Email Balls — a desktop email client that visualizes your inbox as interactive bubbles."
+authors = ["Nathan Beddoe <nbedd2@protonmail.com>"]
 edition = "2021"
+license = "MIT"
+repository = "https://github.com/engblock/email-balls"
+homepage = "https://github.com/engblock/email-balls"
+readme = "../README.md"
+keywords = ["email", "imap", "tauri", "desktop", "client"]
+categories = ["email"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

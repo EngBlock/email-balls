@@ -1,8 +1,29 @@
 {
   "name": "email-balls",
-  "private": true,
+  "private": false,
   "version": "0.1.0",
   "type": "module",
+  "description": "Desktop email client built with Tauri and React that visualizes IMAP messages as physics-driven balls.",
+  "keywords": [
+    "email",
+    "email-client",
+    "imap",
+    "tauri",
+    "react",
+    "desktop",
+    "typescript",
+    "vite"
+  ],
+  "author": "Nathan Beddoe <nbedd2@protonmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/engblock/email-balls.git"
+  },
+  "bugs": {
+    "url": "https://github.com/engblock/email-balls/issues"
+  },
+  "homepage": "https://github.com/engblock/email-balls#readme",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
