@@ -1,0 +1,28 @@
+# PI Report — Todo #46
+
+## Summary
+Implemented `src/store/slices/emails.ts` with the full EmailsSlice, including:
+- **State**: `emails`, `body`, `bodyLoading`, `emailsLoading`, `emailsError`
+- **Actions**: `loadEmailsForSender(account, sender)`, `loadBody(account, env)`, `closeBody()`, `clearEmails()`
+- **Stale-request race protection**: Two internal generation counters (`_senderFetchSeq`, `_bodyFetchSeq`) encapsulated in the slice-creator closure. Each async fetch increments its counter and captures the new value; responses are only applied if the counter still matches. Stale responses are silently discarded. A detailed comment block explains the pattern.
+- **loadBody** sets a placeholder body immediately (for drawer animation), marks the email as seen in the envelope list, then fetches the full body with stale-request protection.
+- **loadEmailsForSender** clears body/emails upfront, fetches envelopes (prefers cached UIDs, falls back to FROM-search), with stale-request protection.
+
+## Files Changed
+1. **`src/store/slices/emails.ts`** — Full implementation (was empty stub)
+2. **`src/store/slices/emails.test.ts`** — New: 13 focused unit tests covering initial state, closeBody, clearEmails, loadEmailsForSender (including stale discard), loadBody (including stale discard, seen-marking, error handling)
+3. **`src/store/slices/senders.test.ts`** — Fixed type composition issue (standalone store `as any` pattern matching ui.test.ts convention)
+
+## Verification Commands
+```bash
+npx tsc --noEmit              # TypeScript: clean
+npx vitest run                # All 83 tests pass (8 files)
+npx vitest run src/store/slices/emails.test.ts   # 13 emails-specific tests
+npx vite build                # Production build succeeds
+```
+
+## Coordination Notes
+- **Account/Senders/Ui slices untouched** except for the type-composition fix in senders.test.ts (necessary because AppStore now requires EmailsSlice fields).
+- **Sender unread decrement** is intentionally NOT in the emails slice — it's a senders-slice concern. The App migration layer will call `decrementUnread()` from the senders slice alongside `loadBody()` from the emails slice.
+- **`signOut` in account slice** does not yet clear emails state. The full App migration task should add a `clearEmails()` call there.
+- **Todo #58** (comprehensive slice tests) is blocked on this todo and can now add deeper edge-case coverage; the current 13 tests focus on the critical generation-counter stale-discard logic.

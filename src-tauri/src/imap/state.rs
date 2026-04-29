@@ -27,6 +27,7 @@ impl ConnFingerprint {
     }
 }
 
+#[derive(Debug)]
 struct ImapHandle {
     session: Session<TlsStream<TcpStream>>,
     fingerprint: ConnFingerprint,

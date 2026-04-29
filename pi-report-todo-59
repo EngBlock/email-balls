@@ -1,0 +1,43 @@
+# Pi Report: Todo #59 — Patch Pi Zustand Review Findings
+
+## Summary
+
+All five findings from the Zustand review have been addressed. No unrelated changes were touched.
+
+## Files Changed
+
+1. **`src/store/slices/account.ts`** — Three changes:
+   - Removed `hasStoredAccount` import; derived `hasSavedAccount` from the already-loaded `stored` variable (`stored !== null` instead of `hasStoredAccount()`), eliminating the double `loadAccount()` read.
+   - Added `buildAccountFromForm(): AccountConn` action to the slice, giving the form-to-`AccountConn` conversion a stable home for the upcoming App migration. Uses `get()` to read current form state.
+   - Changed slice creator signature from `(set)` to `(set, get)` to support `buildAccountFromForm`.
+
+2. **`src/store/index.ts`** — Removed misleading "one devtools instance" phrase from the root comment (no devtools middleware is configured).
+
+3. **`src/store/slices/account.test.ts`** — Extended with:
+   - Test proving `hasSavedAccount` derives from the single `loadAccount()` result.
+   - `buildAccountFromForm` test group: trimmed host/username, base-10 integer parsing, non-numeric port → NaN, leading-digits truncation behavior (`parseInt("993abc", 10)` → 993), empty string → NaN.
+   - Updated `make()` helper to compose the full `AppStore` (required after another agent expanded `UiSlice`).
+
+4. **`src/store/index.test.ts`** (new) — Composed `useAppStore` smoke test covering:
+   - All slice defaults (account + ui)
+   - `setForm` / `setStage` through composed store
+   - `setError` / `clearError` / `resetUi` through composed store
+   - `signOut` interaction with ui slice
+   - `buildAccountFromForm` available on composed store
+
+## Verification Commands
+
+```sh
+npx tsc --noEmit          # 0 errors
+npx vitest run            # 57 tests pass (6 files)
+npx vite build            # succeeds
+```
+
+## Coordination Notes
+
+- `src/store/slices/ui.ts` was expanded by another agent (added `loading`, `error`, `setLoading`, `setError`, `clearError`, `resetUi`). This was preserved without modification; the only touch was importing `createUiSlice` and `AppStore` in the account test helper to satisfy updated `AppStateCreator` type constraints.
+- `sendersSlice`, `emailsSlice` were not modified; only imported in the test helper for full-store composition.
+
+## Blockers
+
+None.

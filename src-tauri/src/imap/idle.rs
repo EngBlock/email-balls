@@ -82,7 +82,7 @@ impl IdleManager {
         // Same-fingerprint short-circuit, then take the old worker out
         // of the slot so we can join it without holding the lock.
         let old = {
-            let mut g = self.inner.lock().expect("idle state poisoned");
+            let mut g = self.inner.lock().expect("IDLE manager mutex poisoned by a prior panic; restart the app to recover");
             if g.as_ref().map(|r| &r.fingerprint) == Some(&new_fp) {
                 return;
             }
@@ -111,7 +111,7 @@ impl IdleManager {
             })
             .expect("spawn imap-idle thread");
 
-        let mut g = self.inner.lock().expect("idle state poisoned");
+        let mut g = self.inner.lock().expect("IDLE manager mutex poisoned by a prior panic; restart the app to recover");
         *g = Some(Running {
             shutdown,
             join,
@@ -123,7 +123,7 @@ impl IdleManager {
     /// to call multiple times; subsequent calls are no-ops.
     pub fn stop(&self) {
         let old = {
-            let mut g = self.inner.lock().expect("idle state poisoned");
+            let mut g = self.inner.lock().expect("IDLE manager mutex poisoned by a prior panic; restart the app to recover");
             g.take()
         };
         if let Some(old) = old {
