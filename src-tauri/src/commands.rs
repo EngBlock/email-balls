@@ -33,6 +33,7 @@ pub async fn list_senders(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn stream_senders(
     state: tauri::State<'_, ImapState>,
     cache_state: tauri::State<'_, EnvelopeCacheState>,

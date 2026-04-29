@@ -57,7 +57,7 @@ impl HandleSlot {
         let needs_connect = self
             .handle
             .as_ref()
-            .map_or(true, |h| h.fingerprint != fp);
+            .is_none_or(|h| h.fingerprint != fp);
         if needs_connect {
             let session = connect_and_auth(host, port, auth.clone())?;
             self.handle = Some(ImapHandle {

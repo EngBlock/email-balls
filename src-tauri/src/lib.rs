@@ -1,3 +1,11 @@
+#![warn(missing_docs, unused_imports, dead_code, rust_2018_idioms)]
+#![deny(unsafe_code)]
+
+//! Mail Bubbles Tauri backend.
+//!
+//! Wires together the IMAP, envelope cache, and avatar/BIMI subsystems and
+//! exposes them to the frontend via Tauri commands.
+
 mod avatar;
 mod commands;
 mod db;
@@ -9,6 +17,8 @@ use crate::avatar::CacheState;
 use crate::db::{Cache, CacheState as EnvelopeCacheState};
 use crate::imap::{IdleManager, ImapState};
 
+/// Boot the Tauri application: registers plugins, state, and command handlers,
+/// then runs the event loop until the app exits.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()

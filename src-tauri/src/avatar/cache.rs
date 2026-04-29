@@ -140,12 +140,15 @@ mod tests {
             svg_data_url: "data:image/svg+xml;base64,PHN2Zy8+".into(),
         };
         cache.put("example.com", &r);
-        match cache.get_fresh("example.com") {
-            Some(BimiResolution::Found { svg_data_url }) => {
-                assert_eq!(svg_data_url, "data:image/svg+xml;base64,PHN2Zy8+");
-            }
-            other => panic!("expected Found, got {other:?}"),
-        }
+        let got = cache.get_fresh("example.com");
+        assert!(
+            matches!(
+                &got,
+                Some(BimiResolution::Found { svg_data_url })
+                    if svg_data_url == "data:image/svg+xml;base64,PHN2Zy8+"
+            ),
+            "expected Found with matching svg_data_url, got {got:?}",
+        );
     }
 
     #[test]

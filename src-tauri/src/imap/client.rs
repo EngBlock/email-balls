@@ -59,7 +59,7 @@ pub(crate) fn imap_quoted(value: &str) -> String {
     format!("\"{escaped}\"")
 }
 
-fn flag_to_string(f: &Flag) -> String {
+fn flag_to_string(f: &Flag<'_>) -> String {
     match f {
         Flag::Seen => "\\Seen".into(),
         Flag::Answered => "\\Answered".into(),
@@ -72,7 +72,7 @@ fn flag_to_string(f: &Flag) -> String {
     }
 }
 
-fn convert_imap_address(a: &Address) -> EmailAddress {
+fn convert_imap_address(a: &Address<'_>) -> EmailAddress {
     EmailAddress {
         name: a
             .name
@@ -89,7 +89,7 @@ fn convert_imap_address(a: &Address) -> EmailAddress {
     }
 }
 
-fn addresses_from_imap(opt: Option<&Vec<Address>>) -> Vec<EmailAddress> {
+fn addresses_from_imap(opt: Option<&Vec<Address<'_>>>) -> Vec<EmailAddress> {
     opt.map(|v| v.iter().map(convert_imap_address).collect())
         .unwrap_or_default()
 }
@@ -166,7 +166,7 @@ fn is_consumer_domain(host: &str) -> bool {
     // A subdomain of a consumer provider is still consumer-mail —
     // `m.gmail.com` shouldn't accidentally domain-aggregate.
     if let Some(reg) = psl::domain_str(&h) {
-        return CONSUMER_DOMAINS.iter().any(|d| *d == reg);
+        return CONSUMER_DOMAINS.contains(&reg);
     }
     false
 }
@@ -331,7 +331,7 @@ pub(crate) fn split_email(full: &str) -> (Option<String>, Option<String>) {
     }
 }
 
-fn addr_from_parser(a: &mail_parser::Addr) -> EmailAddress {
+fn addr_from_parser(a: &mail_parser::Addr<'_>) -> EmailAddress {
     let (mailbox, host) = a
         .address
         .as_deref()
@@ -348,7 +348,7 @@ fn addr_from_parser(a: &mail_parser::Addr) -> EmailAddress {
     }
 }
 
-fn addresses_from_parser(opt: Option<&mail_parser::Address>) -> Vec<EmailAddress> {
+fn addresses_from_parser(opt: Option<&mail_parser::Address<'_>>) -> Vec<EmailAddress> {
     let Some(a) = opt else { return Vec::new() };
     a.iter().map(addr_from_parser).collect()
 }
@@ -561,6 +561,7 @@ fn search_all_uids(
 /// Fetch FLAGS for the given UIDs in chunks and write any changed sets
 /// back to the cache. Returns the count of rows whose unread state
 /// changed — caller decides whether to re-emit aggregated senders.
+#[allow(clippy::too_many_arguments)]
 fn refresh_flags(
     slot: &Mutex<HandleSlot>,
     host: &str,
@@ -616,6 +617,7 @@ fn refresh_flags(
     n
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn stream_senders(
     slot: &Mutex<HandleSlot>,
     cache: &Cache,
@@ -770,7 +772,7 @@ pub fn stream_senders(
         if skipped_pages > 0 {
             eprintln!(
                 "imap stream_senders: cold sync finished with {skipped_pages} skipped page(s) out of {} total pages",
-                (n + STREAM_PAGE - 1) / STREAM_PAGE
+                n.div_ceil(STREAM_PAGE)
             );
         }
     } else {
@@ -858,7 +860,7 @@ pub fn stream_senders(
         if needs_resettle {
             let fresh = cache.list_records(&key).unwrap_or_default();
             let mut new_acc: HashMap<String, SenderSummary> = HashMap::new();
-            let _ = merge_into(&mut new_acc, fresh.into_iter());
+            let _ = merge_into(&mut new_acc, fresh);
             let senders: Vec<SenderSummary> = new_acc.into_values().collect();
             if !senders.is_empty() {
                 let _ = on_event.send(SenderEvent::Chunk { senders });
