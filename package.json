@@ -48,6 +48,9 @@
     "react-dom": "^19.1.0",
     "zustand": "^5.0.12"
   },
+  "pnpm": {
+    "allowBuilds": ["esbuild"]
+  },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
     "@testing-library/jest-dom": "^6.6.3",
