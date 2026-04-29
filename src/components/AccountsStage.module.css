@@ -1,0 +1,8 @@
+.form {
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.signOutButton {
+  opacity: 0.7;
+}

@@ -151,8 +151,7 @@ impl Cache {
         let rows = stmt
             .query_map(params![&key.account_key, &key.mailbox], |row| {
                 let flags_json: String = row.get(6)?;
-                let flags: Vec<String> =
-                    serde_json::from_str(&flags_json).unwrap_or_default();
+                let flags: Vec<String> = serde_json::from_str(&flags_json).unwrap_or_default();
                 Ok(EnvelopeRecord {
                     uid: row.get::<_, i64>(0)? as u32,
                     from_mailbox: row.get(1)?,
@@ -213,13 +212,8 @@ impl Cache {
                 .map_err(|e| CacheError::Write(e.to_string()))?;
             for (uid, flags) in updates {
                 let json = serde_json::to_string(flags)?;
-                stmt.execute(params![
-                    json,
-                    &key.account_key,
-                    &key.mailbox,
-                    *uid as i64,
-                ])
-                .map_err(|e| CacheError::Write(e.to_string()))?;
+                stmt.execute(params![json, &key.account_key, &key.mailbox, *uid as i64,])
+                    .map_err(|e| CacheError::Write(e.to_string()))?;
             }
         }
         tx.commit().map_err(|e| CacheError::Write(e.to_string()))?;
@@ -404,11 +398,7 @@ mod tests {
             date: Some("Mon, 01 Jan 2024 00:00:00 +0000".into()),
             message_id: Some(format!("<msg-{uid}@example.com>")),
             in_reply_to: None,
-            flags: if seen {
-                vec!["\\Seen".into()]
-            } else {
-                vec![]
-            },
+            flags: if seen { vec!["\\Seen".into()] } else { vec![] },
         }
     }
 
@@ -425,7 +415,13 @@ mod tests {
         let k = key();
 
         cache
-            .upsert_envelopes(&k, &[env(10, "alice", "gmail.com", true), env(11, "bob", "gmail.com", false)])
+            .upsert_envelopes(
+                &k,
+                &[
+                    env(10, "alice", "gmail.com", true),
+                    env(11, "bob", "gmail.com", false),
+                ],
+            )
             .unwrap();
         cache
             .write_meta(
@@ -484,7 +480,12 @@ mod tests {
             )
             .unwrap();
         cache.delete_uids(&k, &[2]).unwrap();
-        let mut sorted: Vec<u32> = cache.list_records(&k).unwrap().iter().map(|r| r.uid).collect();
+        let mut sorted: Vec<u32> = cache
+            .list_records(&k)
+            .unwrap()
+            .iter()
+            .map(|r| r.uid)
+            .collect();
         sorted.sort();
         assert_eq!(sorted, vec![1, 3]);
     }

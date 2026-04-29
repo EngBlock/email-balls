@@ -223,7 +223,9 @@ mod tests {
     #[test]
     fn looks_like_svg_accepts_xml_prolog_and_bare_svg_tag() {
         assert!(looks_like_svg(b"<?xml version=\"1.0\"?><svg/>"));
-        assert!(looks_like_svg(b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>"));
+        assert!(looks_like_svg(
+            b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>"
+        ));
         assert!(looks_like_svg(b"   \n<SVG/>"));
         assert!(looks_like_svg(b"\xEF\xBB\xBF<svg/>"));
     }
@@ -240,7 +242,9 @@ mod tests {
         let url = svg_data_url(b"<svg/>");
         assert!(url.starts_with("data:image/svg+xml;base64,"));
         let b64 = url.trim_start_matches("data:image/svg+xml;base64,");
-        let decoded = base64::engine::general_purpose::STANDARD.decode(b64).unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .unwrap();
         assert_eq!(decoded, b"<svg/>");
     }
 

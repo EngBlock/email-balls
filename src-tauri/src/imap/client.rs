@@ -33,9 +33,9 @@
 //! so RFC 2047 encoded-word syntax is resolved before reaching the
 //! frontend.
 
+use mail_parser::MimeHeaders;
 use std::collections::{HashMap, HashSet};
 use std::net::TcpStream;
-use mail_parser::MimeHeaders;
 
 use imap::types::{Fetch, Flag};
 use imap::Session;
@@ -109,18 +109,9 @@ fn flag_to_string(f: &Flag<'_>) -> String {
 
 fn convert_imap_address(a: &Address<'_>) -> EmailAddress {
     EmailAddress {
-        name: a
-            .name
-            .map(lossy_decoded)
-            .filter(|s| !s.is_empty()),
-        mailbox: a
-            .mailbox
-            .map(lossy_owned)
-            .filter(|s| !s.is_empty()),
-        host: a
-            .host
-            .map(lossy_owned)
-            .filter(|s| !s.is_empty()),
+        name: a.name.map(lossy_decoded).filter(|s| !s.is_empty()),
+        mailbox: a.mailbox.map(lossy_owned).filter(|s| !s.is_empty()),
+        host: a.host.map(lossy_owned).filter(|s| !s.is_empty()),
     }
 }
 
@@ -340,12 +331,8 @@ fn envelope_from_fetch(uid: u32, f: &Fetch) -> EmailEnvelope {
             .map(|e| addresses_from_imap(e.cc.as_ref()))
             .unwrap_or_default(),
         date: env.and_then(|e| e.date).map(lossy_owned),
-        message_id: env
-            .and_then(|e| e.message_id)
-            .map(lossy_owned),
-        in_reply_to: env
-            .and_then(|e| e.in_reply_to)
-            .map(lossy_owned),
+        message_id: env.and_then(|e| e.message_id).map(lossy_owned),
+        in_reply_to: env.and_then(|e| e.in_reply_to).map(lossy_owned),
         flags: f.flags().iter().map(flag_to_string).collect(),
     }
 }
@@ -567,10 +554,7 @@ fn search_new_uids(
         session
             .uid_search(&q)
             .map(|set| {
-                let mut v: Vec<u32> = set
-                    .into_iter()
-                    .filter(|u| *u > lower_exclusive)
-                    .collect();
+                let mut v: Vec<u32> = set.into_iter().filter(|u| *u > lower_exclusive).collect();
                 v.sort_unstable_by(|a, b| b.cmp(a));
                 v
             })
@@ -742,9 +726,7 @@ fn cold_sync_senders(
         let envs = match fetch_envelope_range(slot, host, port, auth, mailbox, &range, false) {
             Ok(e) => e,
             Err(e) => {
-                eprintln!(
-                    "imap stream_senders: fetch failed for range {range}, skipping: {e}"
-                );
+                eprintln!("imap stream_senders: fetch failed for range {range}, skipping: {e}");
                 skipped_pages += 1;
                 Vec::new()
             }
@@ -925,12 +907,18 @@ pub fn stream_senders(
         let scan = scan_limit
             .map(|l| l.min(server_exists))
             .unwrap_or(server_exists);
-        let _ = on_event.send(SenderEvent::Started { total: server_exists, scan });
+        let _ = on_event.send(SenderEvent::Started {
+            total: server_exists,
+            scan,
+        });
     } else if !replay.had_cache {
         let scan = scan_limit
             .map(|l| l.min(server_exists))
             .unwrap_or(server_exists);
-        let _ = on_event.send(SenderEvent::Started { total: server_exists, scan });
+        let _ = on_event.send(SenderEvent::Started {
+            total: server_exists,
+            scan,
+        });
     }
 
     if server_exists == 0 {
@@ -1304,7 +1292,10 @@ mod tests {
 
     #[test]
     fn decode_header_text_passes_plain_ascii_through_unchanged() {
-        assert_eq!(decode_header_text("Done with winter?".into()), "Done with winter?");
+        assert_eq!(
+            decode_header_text("Done with winter?".into()),
+            "Done with winter?"
+        );
         assert_eq!(decode_header_text("".into()), "");
     }
 
@@ -1351,10 +1342,10 @@ mod tests {
         let _ = merge_into(
             &mut acc,
             vec![
-                rec(1, "a", "b.com", None, None),       // read
+                rec(1, "a", "b.com", None, None), // read
                 rec_unread(2, "a", "b.com"),
                 rec_unread(3, "a", "b.com"),
-                rec(4, "a", "b.com", None, None),       // read
+                rec(4, "a", "b.com", None, None), // read
             ],
         );
         let s = acc.get("b.com").unwrap();
@@ -1513,7 +1504,13 @@ mod tests {
             &mut acc,
             vec![
                 rec(10, "noreply", "vercel.com", Some("Vercel"), Some("welcome")),
-                rec(20, "support", "vercel.com", Some("Vercel Support"), Some("re: ticket")),
+                rec(
+                    20,
+                    "support",
+                    "vercel.com",
+                    Some("Vercel Support"),
+                    Some("re: ticket"),
+                ),
                 rec(15, "welcome", "vercel.com", None, Some("hi")),
             ],
         );
@@ -1554,7 +1551,13 @@ mod tests {
             &mut acc,
             vec![
                 rec(10, "noreply", "linear.app", Some("Linear"), Some("welcome")),
-                rec(20, "alerts", "updates.linear.app", Some("Linear Updates"), Some("digest")),
+                rec(
+                    20,
+                    "alerts",
+                    "updates.linear.app",
+                    Some("Linear Updates"),
+                    Some("digest"),
+                ),
                 rec(15, "team", "linear.app", None, Some("hi")),
             ],
         );
@@ -1614,10 +1617,7 @@ mod tests {
         );
         assert_eq!(
             split_email("first+tag@sub.example.com"),
-            (
-                Some("first+tag".into()),
-                Some("sub.example.com".into())
-            )
+            (Some("first+tag".into()), Some("sub.example.com".into()))
         );
         assert_eq!(split_email(""), (None, None));
         assert_eq!(split_email("nohost"), (Some("nohost".into()), None));
@@ -1796,7 +1796,10 @@ mod tests {
         );
         assert_eq!(body.inline_parts.len(), 1, "inline part must be extracted");
         let part = &body.inline_parts[0];
-        assert_eq!(part.content_id, "logo@host", "cid brackets must be stripped");
+        assert_eq!(
+            part.content_id, "logo@host",
+            "cid brackets must be stripped"
+        );
         assert_eq!(part.content_type, "image/png");
         assert_eq!(part.data_base64, png_b64, "bytes round-trip via base64");
     }

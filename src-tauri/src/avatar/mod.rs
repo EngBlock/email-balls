@@ -25,7 +25,11 @@ use serde::Serialize;
 // back undefined, and the bubble paints with no background. Don't drop
 // `rename_all_fields` without rechecking the frontend.
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "status")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "status"
+)]
 pub enum BimiResolution {
     Found { svg_data_url: String },
     Missing,

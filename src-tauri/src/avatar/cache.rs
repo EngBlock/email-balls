@@ -64,11 +64,9 @@ impl CacheState {
             Entry::Found {
                 svg_data_url,
                 fetched_at,
-            } if now.saturating_sub(*fetched_at) < FOUND_TTL_SECS => {
-                Some(BimiResolution::Found {
-                    svg_data_url: svg_data_url.clone(),
-                })
-            }
+            } if now.saturating_sub(*fetched_at) < FOUND_TTL_SECS => Some(BimiResolution::Found {
+                svg_data_url: svg_data_url.clone(),
+            }),
             Entry::Missing { fetched_at } if now.saturating_sub(*fetched_at) < MISSING_TTL_SECS => {
                 Some(BimiResolution::Missing)
             }
@@ -84,7 +82,9 @@ impl CacheState {
         // map, so this is one allocation (the output bytes) regardless
         // of how many entries we've cached.
         let bytes = {
-            let Ok(mut guard) = self.inner.lock() else { return };
+            let Ok(mut guard) = self.inner.lock() else {
+                return;
+            };
             let entry = match resolution {
                 BimiResolution::Found { svg_data_url } => Entry::Found {
                     svg_data_url: svg_data_url.clone(),
@@ -189,11 +189,7 @@ mod tests {
                 fetched_at: stale_fetched_at,
             },
         );
-        std::fs::write(
-            &path,
-            serde_json::to_vec(&CacheFile { entries }).unwrap(),
-        )
-        .unwrap();
+        std::fs::write(&path, serde_json::to_vec(&CacheFile { entries }).unwrap()).unwrap();
         let cache = CacheState::load(path);
         assert!(cache.get_fresh("example.com").is_none());
     }
@@ -208,11 +204,7 @@ mod tests {
             "example.com".to_string(),
             Entry::Missing { fetched_at: stale },
         );
-        std::fs::write(
-            &path,
-            serde_json::to_vec(&CacheFile { entries }).unwrap(),
-        )
-        .unwrap();
+        std::fs::write(&path, serde_json::to_vec(&CacheFile { entries }).unwrap()).unwrap();
         let cache = CacheState::load(path);
         assert!(cache.get_fresh("example.com").is_none());
     }

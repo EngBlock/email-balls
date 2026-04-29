@@ -33,9 +33,8 @@ pub fn run() {
             std::fs::create_dir_all(&app_data).ok();
 
             let salt_path = app_data.join("salt.txt");
-            app.handle().plugin(
-                tauri_plugin_stronghold::Builder::with_argon2(&salt_path).build(),
-            )?;
+            app.handle()
+                .plugin(tauri_plugin_stronghold::Builder::with_argon2(&salt_path).build())?;
 
             // BIMI cache lives next to the salt file in app_local_data;
             // load it once at startup so subsequent lookups are O(1)

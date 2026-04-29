@@ -1,0 +1,45 @@
+.controlsBar {
+  position: fixed;
+  bottom: var(--space-2xl);
+  right: var(--space-2xl);
+  z-index: var(--z-controls);
+  display: flex;
+  gap: var(--space-sm);
+  align-items: stretch;
+}
+
+.unreadToggle {
+  width: 44px;
+  padding: 0;
+  border-radius: var(--radius-md);
+  border: var(--control-border);
+  background: var(--control-bg);
+  color: var(--color-text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  backdrop-filter: var(--backdrop-blur);
+  box-shadow: var(--shadow-float);
+  transition: color var(--transition-fast), background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.unreadToggleActive {
+  border-color: rgba(255, 77, 79, 0.85);
+  background: rgba(255, 77, 79, 0.18);
+  color: var(--color-accent-red-light);
+}
+
+.searchInput {
+  min-width: 280px;
+  padding: var(--space-inset-row);
+  border-radius: var(--radius-md);
+  border: var(--control-border);
+  background: var(--control-bg);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-input);
+  backdrop-filter: var(--backdrop-blur);
+  box-shadow: var(--shadow-float);
+  outline: none;
+}

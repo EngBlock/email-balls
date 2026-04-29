@@ -55,10 +55,7 @@ impl HandleSlot {
         auth: &ImapAuth,
     ) -> Result<&mut ImapHandle, ImapError> {
         let fp = ConnFingerprint::new(host, port, auth.username());
-        let needs_connect = self
-            .handle
-            .as_ref()
-            .is_none_or(|h| h.fingerprint != fp);
+        let needs_connect = self.handle.as_ref().is_none_or(|h| h.fingerprint != fp);
         if needs_connect {
             let session = connect_and_auth(host, port, auth.clone())?;
             self.handle = Some(ImapHandle {

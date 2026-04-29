@@ -196,7 +196,7 @@ const UnreadBadge = memo(function UnreadBadge({ count }: { count: number }) {
   );
 });
 
-export function SenderBubbles({
+function SenderBubblesInner({
   senders,
   onPick,
   searchQuery = "",
@@ -401,3 +401,13 @@ export function SenderBubbles({
     </div>
   );
 }
+
+/**
+ * Memoised so that re-renders of <BubbleLayer> for unrelated reasons
+ * skip SenderBubbles entirely. Props are referentially stable in normal
+ * use: `onPick` is wrapped in useCallback by BubbleLayer, `senders` only
+ * gets a new identity when a chunk merges in, and `searchQuery` /
+ * `unreadOnly` are primitives. React Compiler memoises *inside* the
+ * component; this memo is the boundary memo on top of that.
+ */
+export const SenderBubbles = memo(SenderBubblesInner);

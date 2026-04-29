@@ -38,9 +38,14 @@ pub struct SenderSummary {
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum SenderEvent {
     #[serde(rename_all = "camelCase")]
-    Started { total: u32, scan: u32 },
+    Started {
+        total: u32,
+        scan: u32,
+    },
     #[serde(rename_all = "camelCase")]
-    Chunk { senders: Vec<SenderSummary> },
+    Chunk {
+        senders: Vec<SenderSummary>,
+    },
     Done,
 }
 
