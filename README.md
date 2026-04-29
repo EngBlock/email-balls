@@ -9,10 +9,6 @@ Email Balls is a desktop email client that turns your inbox into a force-directe
 ![Screenshot of the app once fully loaded](docs/README_SCREENSHOT.png "Screenshot of Email Balls once fully loaded")
 ---
 
-
-
-_Screenshot coming soon._
-
 ## Features
 
 - **Sender-bubble visualization.** Force-directed layout (d3-force + Framer Motion) where bubble size reflects message volume from each sender.
