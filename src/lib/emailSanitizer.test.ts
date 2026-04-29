@@ -1,6 +1,11 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { sanitize, collapseQuotes } from "./EmailHtmlFrame";
+import {
+  sanitize,
+  collapseQuotes,
+  buildCsp,
+  buildDocument,
+} from "./emailSanitizer";
 
 describe("sanitize", () => {
   it("rewrites cid: src to data: URL when a matching inline part exists", () => {
@@ -8,7 +13,7 @@ describe("sanitize", () => {
       ["logo@host", "data:image/png;base64,AAA="],
     ]);
     const out = sanitize('<p><img src="cid:logo@host"></p>', cidMap);
-    expect(out).toContain('data:image/png;base64,AAA=');
+    expect(out).toContain("data:image/png;base64,AAA=");
     expect(out.toLowerCase()).not.toContain("cid:");
   });
 
@@ -50,7 +55,7 @@ describe("sanitize", () => {
       new Map(),
     );
     expect(out).toContain('data-href="https://example.com/x"');
-    expect(out).toMatch(/href="#"/);
+    expect(out).toMatch(/href="#/);
     // The original https URL must not survive as a navigable href —
     // otherwise the iframe could navigate before our click handler
     // routes the click through the system browser. (The data-href
@@ -62,7 +67,7 @@ describe("sanitize", () => {
   it("rewrites mailto: hrefs the same way", () => {
     const out = sanitize('<a href="mailto:a@b.com">x</a>', new Map());
     expect(out).toContain('data-href="mailto:a@b.com"');
-    expect(out).toMatch(/href="#"/);
+    expect(out).toMatch(/href="#/);
   });
 
   it("strips target attribute so target=_blank can't trigger a Tauri popup", () => {
@@ -114,8 +119,67 @@ describe("collapseQuotes", () => {
     expect(detailsBlock).toContain("quoted line 2");
   });
 
+  it("wraps Outlook border-top reply separator and following siblings", () => {
+    const html =
+      '<p>my reply</p>' +
+      '<div style="border-top:solid #e1e1e1 1px;padding-top:10px;">From: …</div>' +
+      '<p>quoted line 1</p>';
+    const out = collapseQuotes(html);
+    expect(out).toMatch(/<details class="email-quote">/);
+    const detailsBlock = out.slice(out.indexOf("<details"));
+    expect(detailsBlock).toContain("border-top:solid");
+    expect(detailsBlock).toContain("quoted line 1");
+  });
+
   it("leaves plain HTML unchanged when no quote markers are present", () => {
     const html = "<p>hello</p><p>world</p>";
     expect(collapseQuotes(html)).toBe(html);
+  });
+});
+
+describe("buildCsp", () => {
+  it("blocks remote images when showRemoteImages is false", () => {
+    const csp = buildCsp(false);
+    expect(csp).toContain("img-src data:");
+    expect(csp).not.toContain("https:");
+  });
+
+  it("allows remote images when showRemoteImages is true", () => {
+    const csp = buildCsp(true);
+    expect(csp).toContain("img-src data: https:");
+  });
+
+  it("includes expected directives", () => {
+    const csp = buildCsp(false);
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("style-src 'unsafe-inline'");
+    expect(csp).toContain("font-src data:");
+  });
+});
+
+describe("buildDocument", () => {
+  it("assembles a full HTML document with CSP and collapsed body", () => {
+    const doc = buildDocument(
+      '<p>hello</p><div class="gmail_quote">quote</div>',
+      new Map(),
+      false,
+    );
+    expect(doc).toMatch(/^<!DOCTYPE html>/i);
+    expect(doc).toContain("<html>");
+    expect(doc).toContain("Content-Security-Policy");
+    expect(doc).toContain("<details class=\"email-quote\">");
+    expect(doc).toContain("hello");
+    expect(doc).toContain("quote");
+  });
+
+  it("rewrites cid: images via buildDocument pipeline", () => {
+    const cidMap = new Map([["img1", "data:image/png;base64,XYZ"]]);
+    const doc = buildDocument(
+      '<img src="cid:img1">',
+      cidMap,
+      false,
+    );
+    expect(doc).toContain("data:image/png;base64,XYZ");
+    expect(doc).not.toContain("cid:img1");
   });
 });

@@ -1429,6 +1429,51 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_senders_returns_empty_for_empty_input() {
+        let out = aggregate_senders(Vec::new());
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn aggregate_senders_combines_same_sender_and_counts_unread() {
+        let recs = vec![
+            rec(1, "alice", "example.com", Some("Alice"), Some("hello")),
+            rec_unread(2, "alice", "example.com"),
+            rec_unread(3, "alice", "example.com"),
+            rec(4, "alice", "example.com", Some("Alice"), Some("re: hello")),
+        ];
+        let out = aggregate_senders(recs);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].message_count, 4);
+        assert_eq!(out[0].unread_count, 2);
+        assert_eq!(out[0].uids, vec![4, 3, 2, 1]);
+        assert_eq!(out[0].display_name.as_deref(), Some("Alice"));
+    }
+
+    #[test]
+    fn aggregate_keeps_existing_display_name_when_newer_record_has_empty_name() {
+        // Empty-string names can arise from RFC-2047 decoding failures or
+        // malformed From headers. merge_into treats them as absent so the
+        // prior (valid) display name is preserved.
+        let recs = vec![
+            rec(1, "noreply", "brand.com", Some("Brand"), Some("welcome")),
+            EnvelopeRecord {
+                uid: 2,
+                from_mailbox: Some("noreply".into()),
+                from_host: Some("brand.com".into()),
+                from_name: Some("".into()),
+                subject: Some("digest".into()),
+                date: None,
+                is_unread: false,
+            },
+        ];
+        let out = aggregate_senders(recs);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].latest_uid, 2);
+        assert_eq!(out[0].display_name.as_deref(), Some("Brand"));
+    }
+
+    #[test]
     fn aggregate_sorts_descending_by_latest_uid() {
         // Three distinct brand hosts so domain-grouping doesn't fold
         // them into one entry; we're verifying sort by latest_uid.

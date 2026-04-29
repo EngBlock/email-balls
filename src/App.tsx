@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { AnimatePresence } from "framer-motion";
 import "./App.css";
+import styles from "./App.module.css";
 import { senderEmail, type EmailEnvelope, type SenderSummary } from "./lib/imap";
 import { SenderBubbles } from "./components/SenderBubbles";
 import { EmailListDrawer } from "./components/EmailListDrawer";
@@ -121,15 +122,14 @@ function App() {
   }
 
   return (
-    <main className="container" style={{ position: "relative" }}>
+    <main className={`container ${styles.container}`}>
       {stage === "accounts" && (
         <form
           onSubmit={(e) => {
             e.preventDefault();
             void onLoadSenders();
           }}
-          className="row"
-          style={{ flexDirection: "column", gap: 8 }}
+          className={`row ${styles.form}`}
         >
           <input value={form.host} onChange={(e) => setForm({ host: e.target.value })} placeholder="IMAP host" />
           <input value={form.port} onChange={(e) => setForm({ port: e.target.value })} placeholder="port" />
@@ -139,7 +139,7 @@ function App() {
             {sendersLoading ? "Loading…" : "Load senders"}
           </button>
           {hasSavedAccount && (
-            <button type="button" onClick={onSignOut} disabled={sendersLoading} style={{ opacity: 0.7 }}>
+            <button type="button" onClick={onSignOut} disabled={sendersLoading} className={styles.signOutButton}>
               Sign out (forget saved credentials)
             </button>
           )}
@@ -147,7 +147,7 @@ function App() {
       )}
 
       {error && (
-        <p style={{ color: "crimson", whiteSpace: "pre-wrap" }}>error: {error}</p>
+        <p className={styles.errorBanner}>error: {error}</p>
       )}
 
       {/* Bubble layer stays mounted across stages so the simulation,
@@ -159,11 +159,8 @@ function App() {
       {stage !== "accounts" && (
         <section
           aria-hidden={stage !== "senders"}
+          className={styles.bubbleLayer}
           style={{
-            position: "absolute",
-            inset: 0,
-            display: "flex",
-            flexDirection: "column",
             visibility: stage === "senders" ? "visible" : "hidden",
             pointerEvents: stage === "senders" ? "auto" : "none",
           }}
@@ -201,17 +198,7 @@ function App() {
       </AnimatePresence>
 
       {stage === "senders" && !activeSender && (
-        <div
-          style={{
-            position: "fixed",
-            bottom: 24,
-            right: 24,
-            zIndex: 10,
-            display: "flex",
-            gap: 8,
-            alignItems: "stretch",
-          }}
-        >
+        <div className={styles.controlsBar}>
           <button
             type="button"
             aria-pressed={unreadOnly}
@@ -222,23 +209,9 @@ function App() {
             }
             title="Toggle unread-only filter"
             onClick={() => setUnreadOnly(!unreadOnly)}
+            className={`${styles.unreadToggle} ${unreadOnly ? styles.unreadToggleActive : ""}`}
             style={{
-              width: 44,
-              padding: 0,
-              borderRadius: 10,
               border: `1px solid ${unreadOnly ? "rgba(255, 77, 79, 0.85)" : "rgba(255, 255, 255, 0.18)"}`,
-              background: unreadOnly
-                ? "rgba(255, 77, 79, 0.18)"
-                : "rgba(20, 20, 20, 0.7)",
-              color: unreadOnly ? "#ff8a8c" : "rgba(255, 255, 255, 0.7)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              cursor: "pointer",
-              backdropFilter: "blur(10px)",
-              boxShadow: "0 6px 20px rgba(0, 0, 0, 0.35)",
-              transition:
-                "color 180ms, background 180ms, border-color 180ms",
             }}
           >
             <svg
@@ -273,18 +246,7 @@ function App() {
             autoCorrect="off"
             autoCapitalize="off"
             spellCheck={false}
-            style={{
-              minWidth: 280,
-              padding: "10px 14px",
-              borderRadius: 10,
-              border: "1px solid rgba(255, 255, 255, 0.18)",
-              background: "rgba(20, 20, 20, 0.7)",
-              color: "white",
-              fontSize: "0.95em",
-              backdropFilter: "blur(10px)",
-              boxShadow: "0 6px 20px rgba(0, 0, 0, 0.35)",
-              outline: "none",
-            }}
+            className={styles.searchInput}
           />
         </div>
       )}

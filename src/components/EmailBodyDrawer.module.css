@@ -1,0 +1,66 @@
+/* EmailBodyDrawer.module.css — static styles extracted from inline styles.
+ * Dynamic values (Drawer width) remain inline. */
+
+.headerTitle {
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-lg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.headerMeta {
+  font-size: var(--font-size-sm);
+  opacity: var(--opacity-dim);
+  margin-top: var(--space-xs);
+}
+
+.loadingState,
+.noBody {
+  padding: var(--space-inset-default);
+  font-size: var(--font-size-md);
+  opacity: var(--opacity-faint);
+  font-style: italic;
+}
+
+.showImagesBanner {
+  padding: var(--space-inset-sm);
+  font-size: var(--font-size-sm);
+  background: var(--color-border-faint);
+  border-bottom: var(--color-border-subtle);
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.showImagesText {
+  opacity: var(--opacity-medium);
+}
+
+.showImagesButton {
+  margin-left: auto;
+  font-size: var(--font-size-sm);
+  padding: var(--space-inset-tight);
+  border-radius: var(--radius-sm);
+  border: var(--control-border);
+  background: var(--color-surface-none);
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+
+.htmlFrameWrapper {
+  padding: 0 var(--space-xs);
+}
+
+.attachmentsList {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-inset-body);
+  border-top: 1px solid var(--color-border-default);
+}
+
+.attachmentItem {
+  font-size: var(--font-size-sm);
+  opacity: var(--opacity-bright);
+  padding: var(--space-xs) 0;
+}

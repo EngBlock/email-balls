@@ -1,0 +1,92 @@
+/* EmailListDrawer.module.css — static styles extracted from inline styles.
+ * Dynamic values (avatar colour / image, Drawer width/x, unread dot
+ * opacity & weight) remain inline. */
+
+.headerRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.avatar {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-full);
+  background-size: cover;
+  background-position: center;
+  border: var(--avatar-border);
+}
+
+.headerMeta {
+  min-width: 0;
+}
+
+.label {
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-lg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.email {
+  font-size: var(--font-size-sm);
+  opacity: var(--opacity-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.emptyState {
+  padding: var(--space-inset-default);
+  opacity: var(--opacity-muted);
+  font-size: var(--font-size-md);
+}
+
+.emailList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.emailRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: var(--space-inset-row);
+  background: var(--color-surface-none);
+  border: none;
+  border-bottom: var(--email-row-border-bottom);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.unreadDot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+}
+
+.emailRowContent {
+  min-width: 0;
+  flex: 1;
+}
+
+.subject {
+  font-size: var(--font-size-base);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.date {
+  font-size: var(--font-size-xs);
+  opacity: var(--opacity-faint);
+  margin-top: var(--space-xs);
+}

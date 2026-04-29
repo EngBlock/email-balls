@@ -1,0 +1,113 @@
+/* Design tokens extracted from inline styles in App.tsx and components.
+ * Do NOT modify component files in this pass — tokens are defined here
+ * so they can be referenced centrally in a future refactor. */
+
+:root {
+  /* ── Colors ───────────────────────────────────────────────────── */
+
+  /* Surfaces (dark translucent backgrounds) */
+  --color-surface-70: rgba(20, 20, 20, 0.7);
+  --color-surface-88: rgba(20, 20, 20, 0.88);
+  --color-surface-none: transparent;
+
+  /* Text on dark surfaces */
+  --color-text-primary: white;
+  --color-text-secondary: rgba(255, 255, 255, 0.7);
+  --color-text-muted: rgba(255, 255, 255, 0.65);
+  --color-text-dim: rgba(255, 255, 255, 0.55);
+  --color-text-faint: rgba(255, 255, 255, 0.35);
+  --color-text-near-solid: rgba(255, 255, 255, 0.9);
+
+  /* Accents */
+  --color-accent-error: crimson;
+  --color-accent-red: #ff4d4f;
+  --color-accent-red-light: #ff8a8c;
+  --color-accent-blue: #4d9dff;
+  --color-accent-link: #7ab7ff;
+
+  /* Borders */
+  --color-border-strong: rgba(255, 255, 255, 0.18);
+  --color-border-default: rgba(255, 255, 255, 0.08);
+  --color-border-subtle: rgba(255, 255, 255, 0.06);
+  --color-border-faint: rgba(255, 255, 255, 0.04);
+
+  /* Shadow colors */
+  --color-shadow-heavy: rgba(0, 0, 0, 0.45);
+  --color-shadow-float: rgba(0, 0, 0, 0.35);
+  --color-shadow-medium: rgba(0, 0, 0, 0.25);
+  --color-shadow-light: rgba(0, 0, 0, 0.4);
+  --color-shadow-ambient: rgba(0, 0, 0, 0.18);
+
+  /* ── Spacing ───────────────────────────────────────────────────── */
+  --space-xs: 0.25rem;
+  --space-sm: 0.5rem;
+  --space-md: 0.75rem;
+  --space-lg: 1rem;
+  --space-xl: 1.125rem;
+  --space-2xl: 1.5rem;
+
+  /* Composite spacing tokens (common padding patterns) */
+  --space-inset-default: 1rem 1.125rem;
+  --space-inset-sm: 0.5rem 1.125rem;
+  --space-inset-tight: 0.25rem 0.625rem;
+  --space-inset-row: 0.625rem 1.125rem;
+  --space-inset-body: 0.75rem 1.125rem;
+
+  /* ── Border Radius ─────────────────────────────────────────────── */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-full: 50%;
+
+  /* ── Z-Index ───────────────────────────────────────────────────── */
+  --z-controls: 10;
+  --z-drawer: 20;
+  --z-drawer-body: 30;
+
+  /* ── Shadows ───────────────────────────────────────────────────── */
+  --shadow-drawer: -12px 0 40px var(--color-shadow-heavy);
+  --shadow-float: 0 6px 20px var(--color-shadow-float);
+  --shadow-bubble: 0 4px 14px var(--color-shadow-medium);
+  --shadow-badge: 0 2px 6px var(--color-shadow-light);
+
+  /* ── Transitions ───────────────────────────────────────────────── */
+  --transition-fast: 180ms;
+  --transition-opacity: opacity var(--transition-fast) ease;
+
+  /* ── Backdrop Filter ───────────────────────────────────────────── */
+  --backdrop-blur: blur(10px);
+
+  /* ── Typography ────────────────────────────────────────────────── */
+  --font-size-xs: 0.6875rem;
+  --font-size-sm: 0.75rem;
+  --font-size-md: 0.8125rem;
+  --font-size-base: 0.875rem;
+  --font-size-lg: 0.9375rem;
+  --font-size-icon: 1.125rem;
+  --font-size-input: 0.95em;
+  --font-weight-normal: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+  --line-height-body: 1.5;
+  --line-height-single: 1;
+
+  /* ── Opacity ───────────────────────────────────────────────────── */
+  --opacity-faint: 0.55;
+  --opacity-muted: 0.6;
+  --opacity-dim: 0.65;
+  --opacity-medium: 0.7;
+  --opacity-bright: 0.75;
+  --opacity-strong: 0.78;
+  --opacity-near-solid: 0.9;
+
+  /* ── Component-specific ────────────────────────────────────────── */
+  --drawer-bg: var(--color-surface-88);
+  --drawer-border-left: 1px solid var(--color-border-default);
+  --control-bg: var(--color-surface-70);
+  --control-border: 1px solid var(--color-border-strong);
+  --email-row-border-bottom: 1px solid var(--color-border-faint);
+  --avatar-border: 1px solid var(--color-border-strong);
+  --bubble-border: 1px solid rgba(255, 255, 255, 0.35);
+  --badge-bg: var(--color-accent-red);
+  --badge-border: 1.5px solid rgba(20, 20, 20, 0.9);
+}

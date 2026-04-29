@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import styles from "./EmailListDrawer.module.css";
 import { Drawer } from "./Drawer";
 import { resolveAvatarForSender } from "../lib/avatar";
 import { hashColor } from "../lib/gravatar";
@@ -59,41 +60,19 @@ export function EmailListDrawer({
       zIndex={20}
       onClose={onClose}
       header={
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div className={styles.headerRow}>
           <div
+            className={styles.avatar}
             style={{
-              flex: "none",
-              width: 44,
-              height: 44,
-              borderRadius: "50%",
               backgroundColor: color,
               backgroundImage: avatar ? `url(${avatar})` : "none",
-              backgroundSize: "cover",
-              backgroundPosition: "center",
-              border: "1px solid rgba(255, 255, 255, 0.18)",
             }}
           />
-          <div style={{ minWidth: 0 }}>
-            <div
-              style={{
-                fontWeight: 600,
-                fontSize: 15,
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-              }}
-            >
+          <div className={styles.headerMeta}>
+            <div className={styles.label}>
               {label}
             </div>
-            <div
-              style={{
-                fontSize: 12,
-                opacity: 0.65,
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-              }}
-            >
+            <div className={styles.email}>
               {email}
             </div>
           </div>
@@ -101,15 +80,15 @@ export function EmailListDrawer({
       }
     >
       {loading && emails.length === 0 ? (
-        <div style={{ padding: "16px 18px", opacity: 0.6, fontSize: 13 }}>
+        <div className={styles.emptyState}>
           Loading messages…
         </div>
       ) : emails.length === 0 ? (
-        <div style={{ padding: "16px 18px", opacity: 0.6, fontSize: 13 }}>
+        <div className={styles.emptyState}>
           No messages.
         </div>
       ) : (
-        <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+        <ul className={styles.emailList}>
           {emails.map((env) => {
             const unread = !env.flags.includes("\\Seen");
             return (
@@ -117,53 +96,27 @@ export function EmailListDrawer({
               <button
                 type="button"
                 onClick={() => onPickEmail(env)}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  width: "100%",
-                  textAlign: "left",
-                  padding: "10px 18px",
-                  background: "transparent",
-                  border: "none",
-                  borderBottom: "1px solid rgba(255, 255, 255, 0.04)",
-                  color: "white",
-                  cursor: "pointer",
-                  borderRadius: 0,
-                  boxShadow: "none",
-                }}
+                className={styles.emailRow}
               >
                 <div
                   aria-hidden
+                  className={styles.unreadDot}
                   style={{
-                    flex: "none",
-                    width: 8,
-                    height: 8,
-                    borderRadius: "50%",
                     background: unread ? "#4d9dff" : "transparent",
                   }}
                 />
-                <div style={{ minWidth: 0, flex: 1 }}>
+                <div className={styles.emailRowContent}>
                   <div
+                    className={styles.subject}
                     style={{
-                      fontSize: 14,
                       fontWeight: unread ? 700 : 500,
                       opacity: unread ? 1 : 0.78,
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
                     }}
                   >
                     {env.subject ?? "(no subject)"}
                   </div>
                   {env.date && (
-                    <div
-                      style={{
-                        fontSize: 11,
-                        opacity: 0.55,
-                        marginTop: 2,
-                      }}
-                    >
+                    <div className={styles.date}>
                       {env.date}
                     </div>
                   )}

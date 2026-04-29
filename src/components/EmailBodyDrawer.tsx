@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import styles from "./EmailBodyDrawer.module.css";
 import { Drawer } from "./Drawer";
 import { EmailHtmlFrame } from "./EmailHtmlFrame";
 import { EmailTextBody } from "./EmailTextBody";
@@ -44,19 +45,11 @@ export function EmailBodyDrawer({ body, loading = false, onClose }: Props) {
       zIndex={30}
       onClose={onClose}
       header={
-        <div style={{ minWidth: 0 }}>
-          <div
-            style={{
-              fontWeight: 600,
-              fontSize: 15,
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-            }}
-          >
+        <div className={styles.headerMeta}>
+          <div className={styles.headerTitle}>
             {body.subject ?? "(no subject)"}
           </div>
-          <div style={{ fontSize: 12, opacity: 0.65, marginTop: 2 }}>
+          <div className={styles.headerMeta}>
             {fromLabel}
             {body.date && <> · {body.date}</>}
           </div>
@@ -64,52 +57,26 @@ export function EmailBodyDrawer({ body, loading = false, onClose }: Props) {
       }
     >
       {loading && !hasContent ? (
-        <div
-          style={{
-            padding: "16px 18px",
-            fontSize: 13,
-            opacity: 0.55,
-            fontStyle: "italic",
-          }}
-        >
+        <div className={styles.loadingState}>
           Loading message…
         </div>
       ) : body.htmlBody ? (
         <>
           {showImagesButtonVisible && !showRemoteImages && (
-            <div
-              style={{
-                padding: "8px 18px",
-                fontSize: 12,
-                background: "rgba(255, 255, 255, 0.04)",
-                borderBottom: "1px solid rgba(255, 255, 255, 0.06)",
-                display: "flex",
-                alignItems: "center",
-                gap: 12,
-              }}
-            >
-              <span style={{ opacity: 0.7 }}>
+            <div className={styles.showImagesBanner}>
+              <span className={styles.showImagesText}>
                 Remote images blocked to protect privacy
               </span>
               <button
                 type="button"
                 onClick={() => setShowRemoteImages(true)}
-                style={{
-                  marginLeft: "auto",
-                  fontSize: 12,
-                  padding: "4px 10px",
-                  borderRadius: 6,
-                  border: "1px solid rgba(255, 255, 255, 0.18)",
-                  background: "transparent",
-                  color: "white",
-                  cursor: "pointer",
-                }}
+                className={styles.showImagesButton}
               >
                 Show images
               </button>
             </div>
           )}
-          <div style={{ padding: "0 4px" }}>
+          <div className={styles.htmlFrameWrapper}>
             <EmailHtmlFrame
               html={body.htmlBody}
               inlineParts={body.inlineParts}
@@ -120,34 +87,16 @@ export function EmailBodyDrawer({ body, loading = false, onClose }: Props) {
       ) : body.textBody ? (
         <EmailTextBody text={body.textBody} />
       ) : (
-        <div
-          style={{
-            padding: "16px 18px",
-            fontSize: 13,
-            opacity: 0.55,
-            fontStyle: "italic",
-          }}
-        >
+        <div className={styles.noBody}>
           (no body)
         </div>
       )}
       {body.attachments.length > 0 && (
-        <ul
-          style={{
-            listStyle: "none",
-            margin: 0,
-            padding: "12px 18px",
-            borderTop: "1px solid rgba(255, 255, 255, 0.08)",
-          }}
-        >
+        <ul className={styles.attachmentsList}>
           {body.attachments.map((a, i) => (
             <li
               key={i}
-              style={{
-                fontSize: 12,
-                opacity: 0.75,
-                padding: "4px 0",
-              }}
+              className={styles.attachmentItem}
             >
               {a.filename ?? "(unnamed)"} · {a.contentType} · {a.size} bytes
             </li>
