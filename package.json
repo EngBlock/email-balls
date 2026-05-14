@@ -39,34 +39,34 @@
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-opener": "^2",
     "@tauri-apps/plugin-stronghold": "^2.3.1",
-    "@types/node": "^25.6.0",
+    "@types/node": "^25.7.0",
     "d3-force": "^3.0.0",
     "d3-quadtree": "^3.0.1",
-    "dompurify": "^3.4.1",
+    "dompurify": "^3.4.3",
     "framer-motion": "^12.38.0",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "zustand": "^5.0.12"
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "zustand": "^5.0.13"
   },
   "pnpm": {
     "allowBuilds": ["esbuild"]
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
-    "@testing-library/jest-dom": "^6.6.3",
-    "@testing-library/react": "^16.1.0",
-    "@testing-library/user-event": "^14.5.2",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/d3-force": "^3.0.10",
     "@types/d3-quadtree": "^3.0.6",
-    "@types/react": "^19.1.8",
-    "@types/react-dom": "^19.1.6",
-    "@vitejs/plugin-react": "^4.6.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^4.7.0",
     "babel-plugin-react-compiler": "^1.0.0",
-    "jsdom": "^29.1.0",
-    "oxfmt": "^0.47.0",
-    "oxlint": "^1.62.0",
-    "typescript": "~5.8.3",
-    "vite": "^7.0.4",
-    "vitest": "^4.1.5"
+    "jsdom": "^29.1.1",
+    "oxfmt": "^0.49.0",
+    "oxlint": "^1.64.0",
+    "typescript": "~5.9.3",
+    "vite": "^7.3.3",
+    "vitest": "^4.1.6"
   }
 }
